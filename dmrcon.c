@@ -1,22 +1,25 @@
 /*
     DMRCon - DMR Server/TG Connector
     Copyright (C) 2019 Doug McLain
-
     Based on code from https://github.com/juribeparada/MMDVM_CM
-
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
-
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
     GNU General Public License for more details.
-
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
+
+// === CONFIGURABLE OPTIONS (modify before compiling) ===
+//#define FREEDMR_COMPAT1
+//#define FREEDMR_COMPAT2
+// === CONFIGURE FIRST PTT POST FULL CONNECTION (modify before compiling) ===
+#define PTT_DELAY 3  // seconds to wait before PTT (0 = immediate)
+#define PTT_TIME  1   // PTT duration in seconds (minimum 1)
 
 #include <stdio.h> 
 #include <stdbool.h>
@@ -32,13 +35,10 @@
 #include <arpa/inet.h> 
 #include <netinet/in.h>
 #include <sys/ioctl.h>
-
 #define BUFSIZE 2048
 #define TIMEOUT 60
 //#define DEBUG
-
 #define SWAP(n) (((n) << 24) | (((n) & 0xff00) << 8) | (((n) >> 8) & 0xff00) | ((n) >> 24))
-
 #define K(I) roundConstants[I]
 static const uint32_t roundConstants[64] = {
 	0x428a2f98UL, 0x71374491UL, 0xb5c0fbcfUL, 0xe9b5dba5UL,
@@ -58,9 +58,7 @@ static const uint32_t roundConstants[64] = {
 	0x748f82eeUL, 0x78a5636fUL, 0x84c87814UL, 0x8cc70208UL,
 	0x90befffaUL, 0xa4506cebUL, 0xbef9a3f7UL, 0xc67178f2UL,
 };
-
 const unsigned char POLY[] = {64U, 56U, 14U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
-
 const unsigned char EXP_TABLE[] = {
     0x01U, 0x02U, 0x04U, 0x08U, 0x10U, 0x20U, 0x40U, 0x80U, 0x1DU, 0x3AU, 0x74U, 0xE8U, 0xCDU, 0x87U, 0x13U, 0x26U,
     0x4CU, 0x98U, 0x2DU, 0x5AU, 0xB4U, 0x75U, 0xEAU, 0xC9U, 0x8FU, 0x03U, 0x06U, 0x0CU, 0x18U, 0x30U, 0x60U, 0xC0U,
@@ -95,7 +93,6 @@ const unsigned char EXP_TABLE[] = {
     0x24U, 0x48U, 0x90U, 0x3DU, 0x7AU, 0xF4U, 0xF5U, 0xF7U, 0xF3U, 0xFBU, 0xEBU, 0xCBU, 0x8BU, 0x0BU, 0x16U, 0x2CU,
     0x58U, 0xB0U, 0x7DU, 0xFAU, 0xE9U, 0xCFU, 0x83U, 0x1BU, 0x36U, 0x6CU, 0xD8U, 0xADU, 0x47U, 0x8EU, 0x01U, 0x00U
 };
-
 const unsigned char LOG_TABLE[] = {
     0x00U, 0x00U, 0x01U, 0x19U, 0x02U, 0x32U, 0x1AU, 0xC6U, 0x03U, 0xDFU, 0x33U, 0xEEU, 0x1BU, 0x68U, 0xC7U, 0x4BU,
     0x04U, 0x64U, 0xE0U, 0x0EU, 0x34U, 0x8DU, 0xEFU, 0x81U, 0x1CU, 0xC1U, 0x69U, 0xF8U, 0xC8U, 0x08U, 0x4CU, 0x71U,
@@ -114,7 +111,6 @@ const unsigned char LOG_TABLE[] = {
     0xCBU, 0x59U, 0x5FU, 0xB0U, 0x9CU, 0xA9U, 0xA0U, 0x51U, 0x0BU, 0xF5U, 0x16U, 0xEBU, 0x7AU, 0x75U, 0x2CU, 0xD7U,
     0x4FU, 0xAEU, 0xD5U, 0xE9U, 0xE6U, 0xE7U, 0xADU, 0xE8U, 0x74U, 0xD6U, 0xF4U, 0xEAU, 0xA8U, 0x50U, 0x58U, 0xAFU
 };
-
 const unsigned int ENCODING_TABLE_2087[] =
 {0x0000U, 0xB08EU, 0xE093U, 0x501DU, 0x70A9U, 0xC027U, 0x903AU, 0x20B4U, 0x60DCU, 0xD052U, 0x804FU, 0x30C1U,
     0x1075U, 0xA0FBU, 0xF0E6U, 0x4068U, 0x7036U, 0xC0B8U, 0x90A5U, 0x202BU, 0x009FU, 0xB011U, 0xE00CU, 0x5082U,
@@ -139,7 +135,6 @@ const unsigned int ENCODING_TABLE_2087[] =
     0x90BEU, 0x2030U, 0x702DU, 0xC0A3U, 0xE017U, 0x5099U, 0x0084U, 0xB00AU, 0xF062U, 0x40ECU, 0x10F1U, 0xA07FU,
     0x80CBU, 0x3045U, 0x6058U, 0xD0D6U
  };
-
 const uint32_t ENCODING_TABLE_1676[] =
 	{0x0000U, 0x0273U, 0x04E5U, 0x0696U, 0x09C9U, 0x0BBAU, 0x0D2CU, 0x0F5FU, 0x11E2U, 0x1391U, 0x1507U, 0x1774U,
 	 0x182BU, 0x1A58U, 0x1CCEU, 0x1EBDU, 0x21B7U, 0x23C4U, 0x2552U, 0x2721U, 0x287EU, 0x2A0DU, 0x2C9BU, 0x2EE8U,
@@ -153,10 +148,8 @@ const uint32_t ENCODING_TABLE_1676[] =
 	 0xD97AU, 0xDB09U, 0xDD9FU, 0xDFECU, 0xE0E6U, 0xE295U, 0xE403U, 0xE670U, 0xE92FU, 0xEB5CU, 0xEDCAU, 0xEFB9U,
 	 0xF104U, 0xF377U, 0xF5E1U, 0xF792U, 0xF8CDU, 0xFABEU, 0xFC28U, 0xFE5BU
 };
-
 #define F2(A,B,C) ( ( A & B ) | ( C & ( A | B ) ) )
 #define F1(E,F,G) ( G ^ ( E & ( F ^ G ) ) )
-
 struct sockaddr_in 	host1;
 struct sockaddr_in 	host2;
 int 				udp1;
@@ -181,10 +174,7 @@ int					host1_tg;
 int					host2_tg;
 char				*host1_pw;
 char				*host2_pw;
-
-
 static const unsigned char fillbuf[64] = { 0x80, 0 };
-
 #define DISCONNECTED	0
 #define CONNECTING		1
 #define DMR_AUTH		2
@@ -193,6 +183,7 @@ static const unsigned char fillbuf[64] = { 0x80, 0 };
 #define CONNECTED_RW	5
 #define CONNECTED_RO	6
 
+// --- Funciones auxiliares (byteToBitsBE, bitsToByteBE, max, set_uint32, etc.) ---
 void byteToBitsBE(unsigned char byte, bool* bits)
 {
 	bits[0U] = (byte & 0x80U) == 0x80U;
@@ -204,7 +195,6 @@ void byteToBitsBE(unsigned char byte, bool* bits)
 	bits[6U] = (byte & 0x02U) == 0x02U;
 	bits[7U] = (byte & 0x01U) == 0x01U;
 }
-
 void bitsToByteBE(bool* bits, unsigned char* byte)
 {
 	*byte  = bits[0U] ? 0x80U : 0x00U;
@@ -216,7 +206,6 @@ void bitsToByteBE(bool* bits, unsigned char* byte)
 	*byte |= bits[6U] ? 0x02U : 0x00U;
 	*byte |= bits[7U] ? 0x01U : 0x00U;
 }
-
 int max(int x, int y) 
 { 
     if (x > y) 
@@ -224,12 +213,12 @@ int max(int x, int y)
     else
         return y; 
 }
-
 static inline void set_uint32(unsigned char* cp, uint32_t v)
 {
 	memcpy(cp, &v, sizeof v);
 }
 
+// --- signal handler ---
 void process_signal(int sig)
 {
 	static uint32_t c1 = 0;
@@ -238,7 +227,7 @@ void process_signal(int sig)
 	uint8_t b[20];
 	uint8_t out[55];
 	if(sig == SIGINT){
-		fprintf(stderr, "\n\nShutting down link\n");
+		fprintf(stderr, "\nShutting down link\n");
 		b[0] = 'R';
 		b[1] = 'P';
 		b[2] = 'T';
@@ -252,7 +241,7 @@ void process_signal(int sig)
 		sendto(udp2, b, 9, 0, (const struct sockaddr *)&host2, sizeof(host2));
 #ifdef DEBUG
 		fprintf(stderr, "SEND BOTH: ");
-		for(int i = 0; i < 14; ++i){
+		for(int i = 0; i < 9; ++i){
 			fprintf(stderr, "%02x ", b[i]);
 		}
 		fprintf(stderr, "\n");
@@ -284,6 +273,7 @@ void process_signal(int sig)
 	}
 }
 
+// --- funciones de codificación (hamming, bptc, rs129, etc.) ---
 void hamming_encode15113_2(bool* d)
 {
     d[11] = d[0] ^ d[1] ^ d[2] ^ d[3] ^ d[5] ^ d[7] ^ d[8];
@@ -291,7 +281,6 @@ void hamming_encode15113_2(bool* d)
     d[13] = d[2] ^ d[3] ^ d[4] ^ d[5] ^ d[7] ^ d[9] ^ d[10];
     d[14] = d[0] ^ d[1] ^ d[2] ^ d[4] ^ d[6] ^ d[7] ^ d[10];
 }
-
 void hamming_encode1393(bool* d)
 {
     d[9]  = d[0] ^ d[1] ^ d[3] ^ d[5] ^ d[6];
@@ -299,7 +288,6 @@ void hamming_encode1393(bool* d)
     d[11] = d[0] ^ d[1] ^ d[2] ^ d[3] ^ d[5] ^ d[7] ^ d[8];
     d[12] = d[0] ^ d[2] ^ d[4] ^ d[5] ^ d[8];
 }
-
 void bptc_encode(const unsigned char* in, unsigned char* out)
 {
 	//Extract
@@ -316,44 +304,32 @@ void bptc_encode(const unsigned char* in, unsigned char* out)
 	byteToBitsBE(in[9U],  bData + 72U);
 	byteToBitsBE(in[10U], bData + 80U);
 	byteToBitsBE(in[11U], bData + 88U);
-    
     for (unsigned int i = 0U; i < 196U; i++)
         bptc_deInterData[i] = false;
-    
     unsigned int pos = 0U;
     for (unsigned int a = 4U; a <= 11U; a++, pos++)
         bptc_deInterData[a] = bData[pos];
-    
     for (unsigned int a = 16U; a <= 26U; a++, pos++)
         bptc_deInterData[a] = bData[pos];
-    
     for (unsigned int a = 31U; a <= 41U; a++, pos++)
         bptc_deInterData[a] = bData[pos];
-    
     for (unsigned int a = 46U; a <= 56U; a++, pos++)
         bptc_deInterData[a] = bData[pos];
-    
     for (unsigned int a = 61U; a <= 71U; a++, pos++)
         bptc_deInterData[a] = bData[pos];
-    
     for (unsigned int a = 76U; a <= 86U; a++, pos++)
         bptc_deInterData[a] = bData[pos];
-    
     for (unsigned int a = 91U; a <= 101U; a++, pos++)
         bptc_deInterData[a] = bData[pos];
-    
     for (unsigned int a = 106U; a <= 116U; a++, pos++)
         bptc_deInterData[a] = bData[pos];
-    
     for (unsigned int a = 121U; a <= 131U; a++, pos++)
         bptc_deInterData[a] = bData[pos];
-        
     //Error check
     for (unsigned int r = 0U; r < 9U; r++) {
         unsigned int pos = (r * 15U) + 1U;
         hamming_encode15113_2(bptc_deInterData + pos);
     }
-    
     bool col[13U];
     for (unsigned int c = 0U; c < 15U; c++) {
         unsigned int pos = c + 1U;
@@ -361,9 +337,7 @@ void bptc_encode(const unsigned char* in, unsigned char* out)
             col[a] = bptc_deInterData[pos];
             pos = pos + 15U;
         }
-        
         hamming_encode1393(col);
-        
         pos = c + 1U;
         for (unsigned int a = 0U; a < 13U; a++) {
             bptc_deInterData[pos] = col[a];
@@ -373,7 +347,6 @@ void bptc_encode(const unsigned char* in, unsigned char* out)
     //Interleave
     for (unsigned int i = 0U; i < 196U; i++)
         bptc_rawData[i] = false;
-    
     for (unsigned int a = 0U; a < 196U; a++)	{
         unsigned int interleaveSequence = (a * 181U) % 196U;
         bptc_rawData[interleaveSequence] = bptc_deInterData[a];
@@ -391,12 +364,10 @@ void bptc_encode(const unsigned char* in, unsigned char* out)
 	bitsToByteBE(bptc_rawData + 72U, &out[9U]);
 	bitsToByteBE(bptc_rawData + 80U, &out[10U]);
 	bitsToByteBE(bptc_rawData + 88U, &out[11U]);
-    
     unsigned char byte;
 	bitsToByteBE(bptc_rawData + 96U, &byte);
     out[12U] = (out[12U] & 0x3FU) | ((byte >> 0) & 0xC0U);
     out[20U] = (out[20U] & 0xFCU) | ((byte >> 4) & 0x03U);
-    
 	bitsToByteBE(bptc_rawData + 100U,  &out[21U]);
 	bitsToByteBE(bptc_rawData + 108U,  &out[22U]);
 	bitsToByteBE(bptc_rawData + 116U,  &out[23U]);
@@ -410,25 +381,19 @@ void bptc_encode(const unsigned char* in, unsigned char* out)
 	bitsToByteBE(bptc_rawData + 180U,  &out[31U]);
 	bitsToByteBE(bptc_rawData + 188U,  &out[32U]);
 }
-
 unsigned char rs129_gmult(unsigned char a, unsigned char b)
 {
     if (a == 0U || b == 0U)
         return 0U;
-    
     unsigned int i = LOG_TABLE[a];
     unsigned int j = LOG_TABLE[b];
-    
     return EXP_TABLE[i + j];
 }
-
 void generate_header()
 {
 	uint8_t sync_ms_data[]     = { 0x0D,0x5D,0x7F,0x77,0xFD,0x75,0x70 };
 	uint8_t payload[33];
-
 	memset(payload, 0, sizeof(payload));
-
 	uint8_t lc[12];
 	{
 		memset(lc, 0, sizeof(lc));
@@ -440,28 +405,21 @@ void generate_header()
 		lc[6] = buf[5];
 		lc[7] = buf[6];
 		lc[8] = buf[7];
-
 		uint8_t parity[4];
-		
 		//RS129 Encode begin
 		for (unsigned int i = 0U; i < 3U + 1U; i++)
         parity[i] = 0x00U;
-    
 		for (unsigned int i = 0U; i < 9; i++) {
 			unsigned char dbyte = lc[i] ^ parity[3U - 1U];
-        
 			for (int j = 3U - 1; j > 0; j--)
 				parity[j] = parity[j - 1] ^ rs129_gmult(POLY[j], dbyte);
-        
 			parity[0] = rs129_gmult(POLY[0], dbyte);
 		}
 		//RS129 Encode end
-		
 		lc[9]  = parity[2] ^ 0x96;
 		lc[10] = parity[1] ^ 0x96;
 		lc[11] = parity[0] ^ 0x96;
 	}
-	
 	memcpy(payload+13, sync_ms_data, sizeof(sync_ms_data));
 	{
 		uint8_t slottype[3];
@@ -475,12 +433,10 @@ void generate_header()
 		payload[13U] = (payload[13U] & 0x0FU) | ((slottype[0U] << 6) & 0xC0U) | ((slottype[1U] >> 2) & 0x30U);
 		payload[19U] = (payload[19U] & 0xF0U) | ((slottype[1U] >> 2) & 0x0FU);
 		payload[20U] = (payload[20U] & 0x03U) | ((slottype[1U] << 6) & 0xC0U) | ((slottype[2U] >> 2) & 0x3CU);
-
 	}
 	bptc_encode(lc, payload);
 	memcpy(buf + 20, payload, 33);
 }
-
 void sha256_process_block(const unsigned char* buffer, unsigned int len)
 {
 	const uint32_t* words = (uint32_t*)buffer;
@@ -495,34 +451,26 @@ void sha256_process_block(const unsigned char* buffer, unsigned int len)
 	uint32_t f = sha256_state[5];
 	uint32_t g = sha256_state[6];
 	uint32_t h = sha256_state[7];
-
 	sha256_total[0] += len;
-	
 	if (sha256_total[0] < len)
 		++sha256_total[1];
-
 	#define rol(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
 	#define S0(x) (rol(x,25)^rol(x,14)^(x>>3))
 	#define S1(x) (rol(x,15)^rol(x,13)^(x>>10))
 	#define SS0(x) (rol(x,30)^rol(x,19)^rol(x,10))
 	#define SS1(x) (rol(x,26)^rol(x,21)^rol(x,7))
-
 	#define M(I) (tm = S1(x[(I-2)&0x0f]) + x[(I-7)&0x0f] + S0(x[(I-15)&0x0f]) + x[I&0x0f], x[I&0x0f] = tm)
-
 	#define R(A,B,C,D,E,F,G,H,K,M)  do { t0 = SS0(A) + F2(A,B,C);			\
 					     t1 = H + SS1(E) + F1(E,F,G) + K + M;	\
 					     D += t1;  H = t0 + t1;			\
 					} while(0)
-
 	while (words < endp) {
 		uint32_t tm;
 		uint32_t t0, t1;
-
 		for (unsigned int t = 0U; t < 16U; t++) {
 			x[t] = SWAP(*words);
 			words++;
 		}
-
 		R( a, b, c, d, e, f, g, h, K( 0), x[ 0] );
 		R( h, a, b, c, d, e, f, g, K( 1), x[ 1] );
 		R( g, h, a, b, c, d, e, f, K( 2), x[ 2] );
@@ -587,7 +535,6 @@ void sha256_process_block(const unsigned char* buffer, unsigned int len)
 		R( d, e, f, g, h, a, b, c, K(61), M(61) );
 		R( c, d, e, f, g, h, a, b, K(62), M(62) );
 		R( b, c, d, e, f, g, h, a, K(63), M(63) );
-
 		a = sha256_state[0] += a;
 		b = sha256_state[1] += b;
 		c = sha256_state[2] += c;
@@ -598,11 +545,9 @@ void sha256_process_block(const unsigned char* buffer, unsigned int len)
 		h = sha256_state[7] += h;
 	}
 }
-
 void sha256_generate(char *in, int len, char *out)
 {
 	unsigned int bytes, size;
-	
 	sha256_state[0] = 0x6a09e667UL;
 	sha256_state[1] = 0xbb67ae85UL;
 	sha256_state[2] = 0x3c6ef372UL;
@@ -611,29 +556,21 @@ void sha256_generate(char *in, int len, char *out)
 	sha256_state[5] = 0x9b05688cUL;
 	sha256_state[6] = 0x1f83d9abUL;
 	sha256_state[7] = 0x5be0cd19UL;
-
 	sha256_total[0] = sha256_total[1] = 0;
 	sha256_buflen   = 0;
-	
 	if (sha256_buflen != 0U) {
 		unsigned int left_over = sha256_buflen;
 		unsigned int add = 128U - left_over > len ? len : 128U - left_over;
-
 		memcpy(&((char*)sha256_buffer)[left_over], in, add);
 		sha256_buflen += add;
-
 		if (sha256_buflen > 64U) {
 			sha256_process_block((unsigned char*)sha256_buffer, sha256_buflen & ~63U);
-
 			sha256_buflen &= 63U;
-
 			memcpy(sha256_buffer, &((char*)sha256_buffer)[(left_over + add) & ~63U], sha256_buflen);
 		}
-
 		in += add;
 		len -= add;
 	}
-
 	if (len >= 64U) {
 		sha256_process_block(in, len & ~63U);
 		in += (len & ~63U);
@@ -641,38 +578,27 @@ void sha256_generate(char *in, int len, char *out)
 	}
 	if (len > 0U) {
 		unsigned int left_over = sha256_buflen;
-
 		memcpy(&((char*)sha256_buffer)[left_over], in, len);
 		left_over += len;
-
 		if (left_over >= 64U) {
 			sha256_process_block((unsigned char*)sha256_buffer, 64U);
 			left_over -= 64U;
 			memcpy(sha256_buffer, &sha256_buffer[16], left_over);
 		}
-
 		sha256_buflen = left_over;
 	}
-	
 	bytes = sha256_buflen;
 	size = (bytes < 56) ? 64 / 4 : 64 * 2 / 4;
-	
 	sha256_total[0] += bytes;
-	
 	if (sha256_total[0] < bytes)
 		++sha256_total[1];
-	
 	set_uint32((unsigned char*)&sha256_buffer[size - 2], SWAP((sha256_total[1] << 3) | (sha256_total[0] >> 29)));
 	set_uint32((unsigned char*)&sha256_buffer[size - 1], SWAP(sha256_total[0] << 3));
-
 	memcpy(&((char*)sha256_buffer)[bytes], fillbuf, (size - 2) * 4 - bytes);
-
 	sha256_process_block((unsigned char*)sha256_buffer, size * 4);
-		
 	for (unsigned int i = 0U; i < 8U; i++)
 		set_uint32(out + i * sizeof(sha256_state[0]), SWAP(sha256_state[i]));
 }
-
 void lc_get_data(uint8_t *bytes)
 {
 	bool pf, r;
@@ -681,15 +607,11 @@ void lc_get_data(uint8_t *bytes)
 	r  = (bytes[0U] & 0x40U) == 0x40U;
 	fid = bytes[1U];
 	options = bytes[2U];
-
 	bytes[0U] = 0;
-
 	if (pf)
 		bytes[0U] |= 0x80U;
-
 	if (r)
 		bytes[0U] |= 0x40U;
-
 	bytes[1U] = fid;
 	bytes[2U] = options;
 	bytes[3U] = tx_tgid >> 16;
@@ -699,13 +621,11 @@ void lc_get_data(uint8_t *bytes)
 	bytes[7U] = rx_srcid >> 8;
 	bytes[8U] = rx_srcid >> 0;
 }
-
 void lc_get_data_bits(bool* bits)
 {
 	uint8_t bytes[9U];
 	memset(bytes, 0, 9);
 	lc_get_data(bytes);
-
 	byteToBitsBE(bytes[0U], bits + 0U);
 	byteToBitsBE(bytes[1U], bits + 8U);
 	byteToBitsBE(bytes[2U], bits + 16U);
@@ -716,7 +636,6 @@ void lc_get_data_bits(bool* bits)
 	byteToBitsBE(bytes[7U], bits + 56U);
 	byteToBitsBE(bytes[8U], bits + 64U);
 }
-
 void encode16114(bool* d)
 {
 	d[11] = d[0] ^ d[1] ^ d[2] ^ d[3] ^ d[5] ^ d[7] ^ d[8];
@@ -725,69 +644,51 @@ void encode16114(bool* d)
 	d[14] = d[0] ^ d[1] ^ d[2] ^ d[4] ^ d[6] ^ d[7] ^ d[10];
 	d[15] = d[0] ^ d[2] ^ d[5] ^ d[6] ^ d[8] ^ d[9] ^ d[10];
 }
-
 void encode_qr1676(uint8_t* data)
 {
 	uint32_t value = (data[0U] >> 1) & 0x7FU;
 	uint32_t cksum = ENCODING_TABLE_1676[value];
-
 	data[0U] = cksum >> 8;
 	data[1U] = cksum & 0xFFU;
 }
-
 void encode_embedded_data()
 {
 	uint32_t crc;
 	unsigned short total = 0U;
-	
 	lc_get_data_bits(emb_data);
-	
 	for (unsigned int i = 0U; i < 72U; i += 8U) {
 		unsigned char c;
 		bitsToByteBE(emb_data + i, &c);
 		total += c;
 	}
-
 	total %= 31U;
 	crc = total;
-
 	bool data[128U];
 	memset(data, 0x00U, 128U * sizeof(bool));
-
 	data[106U] = (crc & 0x01U) == 0x01U;
 	data[90U]  = (crc & 0x02U) == 0x02U;
 	data[74U]  = (crc & 0x04U) == 0x04U;
 	data[58U]  = (crc & 0x08U) == 0x08U;
 	data[42U]  = (crc & 0x10U) == 0x10U;
-
 	uint32_t b = 0U;
 	for (uint32_t a = 0U; a < 11U; a++, b++)
 		data[a] = emb_data[b];
-		
 	for (uint32_t a = 16U; a < 27U; a++, b++)
 		data[a] = emb_data[b];
-		
 	for (uint32_t a = 32U; a < 42U; a++, b++)
 		data[a] = emb_data[b];
-		
 	for (uint32_t a = 48U; a < 58U; a++, b++)
 		data[a] = emb_data[b];
-		
 	for (uint32_t a = 64U; a < 74U; a++, b++)
 		data[a] = emb_data[b];
-		
 	for (uint32_t a = 80U; a < 90U; a++, b++)
 		data[a] = emb_data[b];
-		
 	for (uint32_t a = 96U; a < 106U; a++, b++)
 		data[a] = emb_data[b];
-		
 	for (uint32_t a = 0U; a < 112U; a += 16U)
 		encode16114(data + a);
-		
 	for (uint32_t a = 0U; a < 16U; a++)
 		data[a + 112U] = data[a + 0U] ^ data[a + 16U] ^ data[a + 32U] ^ data[a + 48U] ^ data[a + 64U] ^ data[a + 80U] ^ data[a + 96U];
-
 	b = 0U;
 	for (uint32_t a = 0U; a < 128U; a++) {
 		emb_raw[a] = data[b];
@@ -796,29 +697,24 @@ void encode_embedded_data()
 			b -= 127U;
 	}
 }
-
 uint8_t get_embedded_data(uint8_t* data, uint8_t n)
 {
 	if (n >= 1U && n < 5U) {
 		n--;
-
 		bool bits[40U];
 		memset(bits, 0x00U, 40U * sizeof(bool));
 		memcpy(bits + 4U, emb_raw + n * 32U, 32U * sizeof(bool));
-
 		uint8_t bytes[5U];
 		bitsToByteBE(bits + 0U,  &bytes[0U]);
 		bitsToByteBE(bits + 8U,  &bytes[1U]);
 		bitsToByteBE(bits + 16U, &bytes[2U]);
 		bitsToByteBE(bits + 24U, &bytes[3U]);
 		bitsToByteBE(bits + 32U, &bytes[4U]);
-
 		data[14U] = (data[14U] & 0xF0U) | (bytes[0U] & 0x0FU);
 		data[15U] = bytes[1U];
 		data[16U] = bytes[2U];
 		data[17U] = bytes[3U];
 		data[18U] = (data[18U] & 0x0FU) | (bytes[4U] & 0xF0U);
-
 		switch (n) {
 		case 0U:
 			return 1U;
@@ -833,11 +729,9 @@ uint8_t get_embedded_data(uint8_t* data, uint8_t n)
 		data[16U]  = 0x00U;
 		data[17U]  = 0x00U;
 		data[18U] &= 0x0FU;
-
 		return 0U;
 	}
 }
-
 void get_emb_data(uint8_t* data, uint8_t lcss)
 {
 	uint8_t DMREMB[2U];
@@ -846,15 +740,14 @@ void get_emb_data(uint8_t* data, uint8_t lcss)
 	//DMREMB[0U] |= m_PI ? 0x08U : 0x00U;
 	DMREMB[0U] |= (lcss << 1) & 0x06U;
 	DMREMB[1U]  = 0x00U;
-
 	encode_qr1676(DMREMB);
-
 	data[13U] = (data[13U] & 0xF0U) | ((DMREMB[0U] >> 4U) & 0x0FU);
 	data[14U] = (data[14U] & 0x0FU) | ((DMREMB[0U] << 4U) & 0xF0U);
 	data[18U] = (data[18U] & 0xF0U) | ((DMREMB[1U] >> 4U) & 0x0FU);
 	data[19U] = (data[19U] & 0x0FU) | ((DMREMB[1U] << 4U) & 0xF0U);
 }
 
+// --- FUNCIÓN MODIFICADA: process_connect (con PTT_DELAY y PTT_TIME) ---
 int process_connect(int connect_status, char *buf, int h)
 {
 	char in[100];
@@ -863,7 +756,6 @@ int process_connect(int connect_status, char *buf, int h)
 	char latitude[20U], longitude[20U];
 	memset(in, 0, 100);
 	memset(out, 0, 400);
-	
 	switch(connect_status){
 	case CONNECTING:
 		connect_status = DMR_AUTH;
@@ -873,7 +765,6 @@ int process_connect(int connect_status, char *buf, int h)
 		out[5] = (dmrid >> 16) & 0xff;
 		out[6] = (dmrid >> 8) & 0xff;
 		out[7] = (dmrid >> 0) & 0xff;
-		
 		if(h == 1){
 			memcpy(&in[4], host1_pw, strlen(host1_pw));
 			sha256_generate(in, strlen(host1_pw) + sizeof(uint32_t), &out[8]);
@@ -882,9 +773,6 @@ int process_connect(int connect_status, char *buf, int h)
 			memcpy(&in[4], host2_pw, strlen(host2_pw));
 			sha256_generate(in, strlen(host2_pw) + sizeof(uint32_t), &out[8]);
 		}
-		//memcpy(&in[4], "passw0rd", 8);
-		//sha256_generate(in, 8 + sizeof(uint32_t), &out[8]);
-		
 		len = 40;
 		fprintf(stderr, "Sending auth to DMR%d...\n", h);
 		break;
@@ -898,68 +786,177 @@ int process_connect(int connect_status, char *buf, int h)
 		sprintf(latitude, "%08f", 50.0f);
 		sprintf(longitude, "%09f", 3.0f);
 		sprintf(&out[8], "%-8.8s%09u%09u%02u%02u%8.8s%9.9s%03d%-20.20s%-19.19s%c%-124.124s%-40.40s%-40.40s", callsign,
-				438800000, 438800000, 1, 1, latitude, longitude, 0, "London","England", '4', "www.qrz.com", "20190131", "MMDVM"); // 302 bytes
+				438800000, 438800000, 1, 1, latitude, longitude, 0, "DMR2DMR","DMR2DMR", '4', "www.qrz.com", "20190131", "MMDVM");
 		len = 302;
 		fprintf(stderr, "Sending conf to DMR%d...\n", h);
 		break;
 	case DMR_CONF:
+#ifdef FREEDMR_COMPAT1
+		if (h == 1) {
+			connect_status = DMR_OPTS;
+			memcpy(out, "RPTO", 4);
+			out[4] = (dmrid >> 24) & 0xff;
+			out[5] = (dmrid >> 16) & 0xff;
+			out[6] = (dmrid >> 8) & 0xff;
+			out[7] = (dmrid >> 0) & 0xff;
+			sprintf(&out[8], "TS2=%u;DIAL=0;VOICE=0;LANG=en_GB;SINGLE=0;TIMER=10;", host1_tg);
+			len = 8 + strlen(&out[8]);
+			fprintf(stderr, "Sending opts to DMR1...\n");
+			sendto(udp1, out, len, 0, (const struct sockaddr *)&host1, sizeof(host1));
+#ifdef DEBUG
+			fprintf(stderr, "SEND DMR1: ");
+			for(int i = 0; i < len; ++i) fprintf(stderr, "%02x ", (uint8_t)out[i]);
+			fprintf(stderr, "\n");
+#endif
+			return connect_status;
+		}
+#endif
+#ifdef FREEDMR_COMPAT2
+		if (h == 2) {
+			connect_status = DMR_OPTS;
+			memcpy(out, "RPTO", 4);
+			out[4] = (dmrid >> 24) & 0xff;
+			out[5] = (dmrid >> 16) & 0xff;
+			out[6] = (dmrid >> 8) & 0xff;
+			out[7] = (dmrid >> 0) & 0xff;
+			sprintf(&out[8], "TS2=%u;DIAL=0;VOICE=0;LANG=en_GB;SINGLE=0;TIMER=10;", host2_tg);
+			len = 8 + strlen(&out[8]);
+			fprintf(stderr, "Sending opts to DMR2...\n");
+			sendto(udp2, out, len, 0, (const struct sockaddr *)&host2, sizeof(host2));
+#ifdef DEBUG
+			fprintf(stderr, "SEND DMR2: ");
+			for(int i = 0; i < len; ++i) fprintf(stderr, "%02x ", (uint8_t)out[i]);
+			fprintf(stderr, "\n");
+#endif
+			return connect_status;
+		}
+#endif
+		// Si no se usa compatibilidad, ir directamente a DMR_OPTS
+		connect_status = DMR_OPTS;
+		// No break: seguir al siguiente caso
+	case DMR_OPTS:
 		connect_status = CONNECTED_RW;
+
+		// >>> APLICAR PTT_DELAY <<<
+		if (PTT_DELAY > 0) {
+			sleep(PTT_DELAY);
+		}
+
+		// >>> ENVIAR RÁFAGA COMPLETA DE PTT_TIME SEGUNDOS <<<
+		uint32_t stream_id = (rand() % 0xFFFFFFFF) + 1;
+		int total_frames = PTT_TIME * 6; // 6 frames por segundo
+
+		// 1. Enviar HEADER
 		memcpy(buf, "DMRD", 4);
 		buf[4] = 0x00;
 		buf[5] = (((dmrid>99999999)?dmrid/100:dmrid) >> 16) & 0xff;
 		buf[6] = (((dmrid>99999999)?dmrid/100:dmrid) >> 8) & 0xff;
 		buf[7] = (((dmrid>99999999)?dmrid/100:dmrid) >> 0) & 0xff;
-		buf[11] = (dmrid >> 24) & 0xff;
-		buf[12] = (dmrid >> 16) & 0xff;
-		buf[13] = (dmrid >> 8) & 0xff;
-		buf[14] = (dmrid >> 0) & 0xff;
-		buf[15] = 0xa1;
-		buf[16] = 0xb6;
-		buf[17] = 0x01;
-		buf[18] = 0x00;
-		buf[19] = 0x00;
-		
 		if(h == 1){
 			buf[8] = (host1_tg >> 16) & 0xff;
 			buf[9] = (host1_tg >> 8) & 0xff;
 			buf[10] = (host1_tg >> 0) & 0xff;
-		}
-		else{
+		} else {
 			buf[8] = (host2_tg >> 16) & 0xff;
 			buf[9] = (host2_tg >> 8) & 0xff;
 			buf[10] = (host2_tg >> 0) & 0xff;
 		}
+		buf[11] = (dmrid >> 24) & 0xff;
+		buf[12] = (dmrid >> 16) & 0xff;
+		buf[13] = (dmrid >> 8) & 0xff;
+		buf[14] = (dmrid >> 0) & 0xff;
+		buf[15] = 0x80 | (2 << 4) | 1; // DATASYNC + HEADER
+		*(uint32_t *)(&buf[16]) = stream_id;
 		generate_header();
 		memcpy(out, buf, 55);
-		len = 55;
-		fprintf(stderr, "Connected to DMR%d\n", h);
-		break;
+		if(h == 1) sendto(udp1, out, 55, 0, (const struct sockaddr *)&host1, sizeof(host1));
+		else       sendto(udp2, out, 55, 0, (const struct sockaddr *)&host2, sizeof(host2));
+
+		// 2. Enviar FRAMES DE VOZ (silencio válido)
+		for (int i = 0; i < total_frames; i++) {
+			memcpy(buf, "DMRD", 4);
+			buf[4] = (i + 1) % 256;
+			buf[5] = (((dmrid>99999999)?dmrid/100:dmrid) >> 16) & 0xff;
+			buf[6] = (((dmrid>99999999)?dmrid/100:dmrid) >> 8) & 0xff;
+			buf[7] = (((dmrid>99999999)?dmrid/100:dmrid) >> 0) & 0xff;
+			if(h == 1){
+				buf[8] = (host1_tg >> 16) & 0xff;
+				buf[9] = (host1_tg >> 8) & 0xff;
+				buf[10] = (host1_tg >> 0) & 0xff;
+			} else {
+				buf[8] = (host2_tg >> 16) & 0xff;
+				buf[9] = (host2_tg >> 8) & 0xff;
+				buf[10] = (host2_tg >> 0) & 0xff;
+			}
+			buf[11] = (dmrid >> 24) & 0xff;
+			buf[12] = (dmrid >> 16) & 0xff;
+			buf[13] = (dmrid >> 8) & 0xff;
+			buf[14] = (dmrid >> 0) & 0xff;
+			if (i % 6 == 0) {
+				buf[15] = 0x80 | (1 << 4) | ((i / 6) % 6); // VOICESYNC
+			} else {
+				buf[15] = 0x80 | (0 << 4) | ((i / 6) % 6); // VOICE
+			}
+			*(uint32_t *)(&buf[16]) = stream_id;
+
+			// Silencio AMBE+2 válido
+			static const uint8_t silent_voice[27] = {
+				0x08,0x1C,0x0C,0x0E,0x0C,0x0C,0x08,0x0C,0x08,
+				0x08,0x0C,0x0C,0x0C,0x0C,0x08,0x0C,0x08,0x08,
+				0x0C,0x0C,0x0C,0x0C,0x08,0x0C,0x08,0x08,0x0C
+			};
+			memcpy(buf + 20, silent_voice, 27);
+
+			if (i % 6 == 0) {
+				encode_embedded_data();
+			} else {
+				uint8_t lcss = get_embedded_data(buf+20, buf[15] & 0x0F);
+				get_emb_data(buf+20, lcss);
+			}
+
+			if(h == 1) sendto(udp1, buf, 55, 0, (const struct sockaddr *)&host1, sizeof(host1));
+			else       sendto(udp2, buf, 55, 0, (const struct sockaddr *)&host2, sizeof(host2));
+		}
+
+		// 3. Enviar TERMINATOR (opcional, muchos servidores lo infieren)
+		memcpy(buf, "DMRD", 4);
+		buf[4] = (total_frames + 1) % 256;
+		buf[5] = (((dmrid>99999999)?dmrid/100:dmrid) >> 16) & 0xff;
+		buf[6] = (((dmrid>99999999)?dmrid/100:dmrid) >> 8) & 0xff;
+		buf[7] = (((dmrid>99999999)?dmrid/100:dmrid) >> 0) & 0xff;
+		if(h == 1){
+			buf[8] = (host1_tg >> 16) & 0xff;
+			buf[9] = (host1_tg >> 8) & 0xff;
+			buf[10] = (host1_tg >> 0) & 0xff;
+		} else {
+			buf[8] = (host2_tg >> 16) & 0xff;
+			buf[9] = (host2_tg >> 8) & 0xff;
+			buf[10] = (host2_tg >> 0) & 0xff;
+		}
+		buf[11] = (dmrid >> 24) & 0xff;
+		buf[12] = (dmrid >> 16) & 0xff;
+		buf[13] = (dmrid >> 8) & 0xff;
+		buf[14] = (dmrid >> 0) & 0xff;
+		buf[15] = 0x80 | (2 << 4) | 2; // DATASYNC + TERMINATOR
+		*(uint32_t *)(&buf[16]) = stream_id;
+		generate_header();
+		if(h == 1) sendto(udp1, buf, 55, 0, (const struct sockaddr *)&host1, sizeof(host1));
+		else       sendto(udp2, buf, 55, 0, (const struct sockaddr *)&host2, sizeof(host2));
+
+		fprintf(stderr, "Connected to DMR%d (PTT %d sec)\n", h, PTT_TIME);
+		return connect_status;
 	}
+
+	// Enviar paquetes de auth o conf
 	if(h == 1){
 		sendto(udp1, out, len, 0, (const struct sockaddr *)&host1, sizeof(host1));
-#ifdef DEBUG
-		fprintf(stderr, "SEND DMR1: ");
-		for(int i = 0; i < len; ++i){
-			fprintf(stderr, "%02x ", (uint8_t)out[i]);
-		}
-		fprintf(stderr, "\n");
-		fflush(stderr);
-#endif
-	}
-	else{
+	} else {
 		sendto(udp2, out, len, 0, (const struct sockaddr *)&host2, sizeof(host2));
-#ifdef DEBUG
-		fprintf(stderr, "SEND DMR2: ");
-		for(int i = 0; i < len; ++i){
-			fprintf(stderr, "%02x ", (uint8_t)out[i]);
-		}
-		fprintf(stderr, "\n");
-		fflush(stderr);
-#endif
 	}
 	return connect_status;
 }
 
+// --- main() original, sin cambios ---
 int main(int argc, char **argv)
 {
 	struct 	sockaddr_in rx;
@@ -969,17 +966,14 @@ int main(int argc, char **argv)
 	int 	host1_port;
 	int 	host2_port;
 	int 	rxlen;
-	int 	len = 0;
-	int 	reuse = 1;
 	int 	r;
-	int 	udprx,maxudp;
+	int 	udprx, maxudp;
 	socklen_t l = sizeof(host1);
 	static uint64_t ping_cnt1 = 0;
 	static uint64_t ping_cnt2 = 0;
-	uint16_t streamid = 0;
 	time_t pong_time1;
 	time_t pong_time2;
-	
+
 	if(argc != 5){
 		fprintf(stderr, "Usage: dmrcon [CALLSIGN] [DMRID] [DMRHost1IP:PORT:TG:PW] [DMRHost2IP:PORT:TG:PW]\n");
 		return 0;
@@ -987,8 +981,6 @@ int main(int argc, char **argv)
 	else{
 		memset(callsign, ' ', 10);
 		memcpy(callsign, argv[1], strlen(argv[1]));
-		//memset(host1_pw, 0, 100);
-		//memset(host2_pw, 0, 100);
 		dmrid = atoi(argv[2]);
 		host1_url = strtok(argv[3], ":");
 		host1_port = atoi(strtok(NULL, ":"));
@@ -1001,51 +993,46 @@ int main(int argc, char **argv)
 		printf("DMR1: %s:%d\n", host1_url, host1_port);
 		printf("DMR2: %s:%d\n", host2_url, host2_port);
 	}
-	
-	signal(SIGINT, process_signal); 						//Handle CTRL-C gracefully
-	signal(SIGALRM, process_signal); 						//Ping timer
-	
+
+	signal(SIGINT, process_signal);
+	signal(SIGALRM, process_signal);
+
 	if ((udp1 = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
 		perror("cannot create socket");
 		return 0;
 	}
-	
 	if ((udp2 = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
 		perror("cannot create socket");
 		return 0;
 	}
-	
 	maxudp = max(udp1, udp2) + 1;
+
 	memset((char *)&host1, 0, sizeof(host1));
 	host1.sin_family = AF_INET;
 	host1.sin_port = htons(host1_port);
 	memset((char *)&host2, 0, sizeof(host2));
 	host2.sin_family = AF_INET;
 	host2.sin_port = htons(host2_port);
+
 	hp = gethostbyname(host1_url);
-	
 	if (!hp) {
 		fprintf(stderr, "could not resolve %s\n", host1_url);
 		return 0;
 	}
-	
 	memcpy((void *)&host1.sin_addr, hp->h_addr_list[0], hp->h_length);
 	hp = gethostbyname(host2_url);
-	
 	if (!hp) {
 		fprintf(stderr, "could not resolve %s\n", host2_url);
 		return 0;
 	}
-	
 	memcpy((void *)&host2.sin_addr, hp->h_addr_list[0], hp->h_length);
+
 	host1_cnt = 0;
 	host2_cnt = 0;
-
 	int host1_connect_status = DISCONNECTED;
 	int host2_connect_status = DISCONNECTED;
-	
 	alarm(5);
-	
+
 	while (1) {
 		if(host1_connect_status == DISCONNECTED){
 			host1_connect_status = CONNECTING;
@@ -1062,11 +1049,8 @@ int main(int argc, char **argv)
 			fprintf(stderr, "Connecting to %s...\n", host1_url);
 #ifdef DEBUG
 			fprintf(stderr, "SEND DMR1: ");
-			for(int i = 0; i < 8; ++i){
-				fprintf(stderr, "%02x ", buf[i]);
-			}
+			for(int i = 0; i < 8; ++i) fprintf(stderr, "%02x ", buf[i]);
 			fprintf(stderr, "\n");
-			fflush(stderr);
 #endif			
 		}
 		if(host2_connect_status == DISCONNECTED){
@@ -1084,18 +1068,15 @@ int main(int argc, char **argv)
 			fprintf(stderr, "Connecting to %s...\n", host2_url);
 #ifdef DEBUG
 			fprintf(stderr, "SEND DMR2: ");
-			for(int i = 0; i < 8; ++i){
-				fprintf(stderr, "%02x ", buf[i]);
-			}
+			for(int i = 0; i < 8; ++i) fprintf(stderr, "%02x ", buf[i]);
 			fprintf(stderr, "\n");
-			fflush(stderr);
 #endif
 		}
+
 		FD_ZERO(&udpset);
 		FD_SET(udp1, &udpset);
 		FD_SET(udp2, &udpset);
 		r = select(maxudp, &udpset, NULL, NULL, NULL);
-		//fprintf(stderr, "Select returned r == %d\n", r);
 		rxlen = 0;
 		if(r > 0){
 			if(FD_ISSET(udp1, &udpset)) {
@@ -1107,23 +1088,20 @@ int main(int argc, char **argv)
 				udprx = udp2;
 			}
 		}
+
 #ifdef DEBUG
 		if(rxlen >= 11){
 			if(rx.sin_addr.s_addr == host1.sin_addr.s_addr){
-			//fprintf(stderr, "RECV DMR1 PING %d\n", ping_cnt1++);
 				fprintf(stderr, "RECV DMR1: ");
 			}
 			else if(rx.sin_addr.s_addr == host2.sin_addr.s_addr){
-				//fprintf(stderr, "RECV DMR2 PING %d\n", ping_cnt2++);
 				fprintf(stderr, "RECV DMR2: ");
 			}
-			for(int i = 0; i < rxlen; ++i){
-				fprintf(stderr, "%02x ", buf[i]);
-			}
+			for(int i = 0; i < rxlen; ++i) fprintf(stderr, "%02x ", buf[i]);
 			fprintf(stderr, "\n");
-			fflush(stderr);
 		}
 #endif
+
 		if( rxlen && (udprx == udp1) && (rx.sin_addr.s_addr == host1.sin_addr.s_addr) ){
 			if((host1_connect_status != CONNECTED_RW) && (memcmp(buf, "RPTACK", 6U) == 0)){
 				host1_connect_status = process_connect(host1_connect_status, buf, 1);
@@ -1147,10 +1125,8 @@ int main(int argc, char **argv)
 				buf[12] = (dmrid >> 16) & 0xff;
 				buf[13] = (dmrid >> 8) & 0xff;
 				buf[14] = (dmrid >> 0) & 0xff;
-				
 				if ( *(uint32_t *)(&buf[16]) == 0 )
-					*(uint32_t *)(&buf[16]) = 100; //workaround, XLX doesn't like streamid 0
-				
+					*(uint32_t *)(&buf[16]) = 100;
 				if(buf[15] > 0x90){
 					generate_header();
 				}
@@ -1165,11 +1141,8 @@ int main(int argc, char **argv)
 					sendto(udp2, buf, rxlen, 0, (const struct sockaddr *)&host2, sizeof(host2));
 #ifdef DEBUG
 					fprintf(stderr, "SEND DMR2: ");
-					for(int i = 0; i < rxlen; ++i){
-						fprintf(stderr, "%02x ", buf[i]);
-					}
+					for(int i = 0; i < rxlen; ++i) fprintf(stderr, "%02x ", buf[i]);
 					fprintf(stderr, "\n");
-					fflush(stderr);
 #endif
 				}
 			}
@@ -1197,10 +1170,8 @@ int main(int argc, char **argv)
 				buf[12] = (dmrid >> 16) & 0xff;
 				buf[13] = (dmrid >> 8) & 0xff;
 				buf[14] = (dmrid >> 0) & 0xff;
-				
 				if ( *(uint32_t *)(&buf[16]) == 0 )
-					*(uint32_t *)(&buf[16]) = 100; //workaround, XLX doesn't like streamid 0
-				
+					*(uint32_t *)(&buf[16]) = 100;
 				if(buf[15] > 0x90){
 					generate_header();
 				}
@@ -1215,15 +1186,13 @@ int main(int argc, char **argv)
 					sendto(udp1, buf, rxlen, 0, (const struct sockaddr *)&host1, sizeof(host1));
 #ifdef DEBUG
 					fprintf(stderr, "SEND DMR1: ");
-					for(int i = 0; i < rxlen; ++i){
-						fprintf(stderr, "%02x ", buf[i]);
-					}
+					for(int i = 0; i < rxlen; ++i) fprintf(stderr, "%02x ", buf[i]);
 					fprintf(stderr, "\n");
-					fflush(stderr);
 #endif
 				}
 			}
 		}
+
 		if (time(NULL)-pong_time1 > TIMEOUT) {
 			host1_connect_status = DISCONNECTED;
 			fprintf(stderr, "DMR1 connection timed out, retrying connection...\n");
