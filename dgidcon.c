@@ -15,6 +15,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/ioctl.h>
+#include <time.h>  // ← AÑADE ESTE
 
 #define BUFSIZE 2048
 //#define DEBUG
@@ -754,122 +755,144 @@ void fich_set_mr(unsigned char mr);
 void fich_set_voip(bool on);
 void fich_encode(unsigned char* bytes);
 void fich_decode(const unsigned char* bytes);  // ← AÑADIR ESTA DECLARACIÓN
+void generate_voice_payload(unsigned char* payload, int frame_num);
 
 /* ============================================================= */
 /* ACTIVACIÓN AUTOMÁTICA CON TRANSMISIÓN CAPTURADA - 2 SEGUNDOS */
 /* ============================================================= */
+void generate_voice_payload(unsigned char* payload, int frame_num)
+{
+    // Patrón que simula mejor datos de voz YSF
+    for (int i = 0; i < 100; i++) {
+        // Alternar entre silencio y tono
+        if ((frame_num + i) % 200 < 100) {
+            payload[i] = 0x55; // Patrón alternante
+        } else {
+            payload[i] = 0xAA; // Patrón inverso
+        }
+    }
+    
+    // Añadir algún marcador de frame como en implementaciones reales
+    payload[0] = (frame_num >> 8) & 0xFF;
+    payload[1] = frame_num & 0xFF;
+}
+
 void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t forced_dgid)
 {
     fprintf(stderr, "Iniciando transmisión YSF completa (DGID %02u)...\n", forced_dgid);
-
     uint8_t frame[155];
     uint8_t fn = 0;
+    struct timespec ts;
     
-    /* ================================================== */
-    /* 1. FRAMES DE HEADER/ACTIVACIÓN (8 frames = 0.8 segundos) */
-    /* ================================================== */
+    // 1. HEADER FRAMES
     fprintf(stderr, "Enviando frames de header...\n");
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 5; i++) {
         memset(frame, 0x00, 155);
         
-        // HEADER YSF
+        // Header YSF
         memcpy(frame, "YSFD", 4);
-        memcpy(frame + 4, callsign, 10);      // Source
-        memcpy(frame + 14, callsign, 10);     // Destination (self)
-        memcpy(frame + 24, callsign, 10);     // Transmitter
-        memset(frame + 34, ' ', 10);          // Receiver
-        memset(frame + 44, ' ', 4);           // GPS + reserved
-        frame[48] = fn;                       // Frame number
+        memcpy(frame + 4, callsign, 10);        // Source
+        memcpy(frame + 14, callsign, 10);       // Destination (self)
+        memcpy(frame + 24, "ALL       ", 10);   // Transmitter
+        memcpy(frame + 34, "          ", 10);   // Receiver
+        frame[44] = 0x00; frame[45] = 0x00;     // GPS
+        frame[46] = 0x00; frame[47] = 0x00;     // Reserved
+        frame[48] = fn;                         // Frame number
         
-        // FICH - Header Frame (FI=0)
+        // FICH - Header Frame - IMPORTANTE: DGID en posición correcta
         memset(m_fich, 0x00, 6);
-        fich_set_fi(0);        // FI=0: Header
-        fich_set_cs(2);        // CS=2: YSF
-        fich_set_cm(0);        // CM=0: Non-communication
-        fich_set_fn(fn >> 1);  // Frame number (div 2)
-        fich_set_ft(0);        // FT=0: Not final
-        fich_set_mr(0);        // MR=0: Not busy
-        fich_set_voip(false);  // No VoIP
-        m_fich[3] = forced_dgid; // DGID
+        fich_set_fi(0);              // FI=0: Header
+        fich_set_cs(2);              // CS=2: YSF
+        fich_set_cm(0);              // CM=0: Non-communication  
+        fich_set_fn(fn >> 1);        // Frame number
+        fich_set_ft(0);              // FT=0: Not final
+        fich_set_mr(0);              // MR=0: Not busy
+        fich_set_voip(false);
+        
+        // DGID DEBE IR EN BYTE 3 DEL FICH (posición 0-5)
+        m_fich[3] = forced_dgid;     // ← ESTA ES LA POSICIÓN CORRECTA
         
         fich_encode(frame + 40);
         
         sendto(udp_sock, frame, 155, 0, (struct sockaddr *)host, sizeof(*host));
-        
         fn += 2;
-        usleep(100000); // 100ms
+        
+        ts.tv_sec = 0;
+        ts.tv_nsec = 90000000L;
+        nanosleep(&ts, NULL);
     }
-
-    /* ================================================== */
-    /* 2. FRAMES DE VOZ (20 frames = 2 segundos de audio) */
-    /* ================================================== */
+    
+    // 2. VOICE FRAMES - MANTENER EL MISMO DGID
     fprintf(stderr, "Enviando frames de voz...\n");
     for (int i = 0; i < 20; i++) {
         memset(frame, 0x00, 155);
         
-        // HEADER YSF
         memcpy(frame, "YSFD", 4);
-        memcpy(frame + 4, callsign, 10);      // Source
-        memcpy(frame + 14, "ALL       ", 10); // Destination: ALL
-        memcpy(frame + 24, callsign, 10);     // Transmitter
-        memset(frame + 34, ' ', 10);          // Receiver
-        memset(frame + 44, ' ', 4);           // GPS + reserved
-        frame[48] = fn;                       // Frame number
+        memcpy(frame + 4, callsign, 10);
+        memcpy(frame + 14, callsign       , 10);   // Destination: ALL
+        memcpy(frame + 24, "ALL       ", 10);
+        memcpy(frame + 34, "          ", 10);
+        frame[44] = 0x00; frame[45] = 0x00;
+        frame[46] = 0x00; frame[47] = 0x00;
+        frame[48] = fn;
         
-        // FICH - Voice Frame (FI=1)
+        // FICH - Voice Frame - MANTENER EL DGID
         memset(m_fich, 0x00, 6);
-        fich_set_fi(1);        // FI=1: Voice Full Rate
-        fich_set_cs(2);        // CS=2: YSF
-        fich_set_cm(0);        // CM=0: Non-communication
-        fich_set_fn(fn >> 1);  // Frame number (div 2)
-        fich_set_ft(0);        // FT=0: Not final
-        fich_set_mr(0);        // MR=0: Not busy
-        fich_set_voip(false);  // No VoIP
-        m_fich[3] = forced_dgid; // DGID
+        fich_set_fi(1);              // FI=1: Voice Full Rate
+        fich_set_cs(2);              // CS=2: YSF
+        fich_set_cm(0);        
+        fich_set_fn(fn >> 1);
+        fich_set_ft(0);
+        fich_set_mr(0);
+        fich_set_voip(false);
+        m_fich[3] = forced_dgid;     // ← MANTENER EL MISMO DGID
+        
+        fich_encode(frame + 40);
+        generate_voice_payload(frame + 55, i);
+        
+        sendto(udp_sock, frame, 155, 0, (struct sockaddr *)host, sizeof(*host));
+        fn += 2;
+        
+        ts.tv_sec = 0;
+        ts.tv_nsec = 90000000L;
+        nanosleep(&ts, NULL);
+    }
+    
+    // 3. TERMINATION
+    fprintf(stderr, "Enviando frame de terminación...\n");
+    for (int i = 0; i < 3; i++) {
+        memset(frame, 0x00, 155);
+        
+        memcpy(frame, "YSFD", 4);
+        memcpy(frame + 4, callsign, 10);
+        memcpy(frame + 14, callsign       , 10);
+        memcpy(frame + 24, "ALL       ", 10);
+        memcpy(frame + 34, "          ", 10);
+        frame[44] = 0x00; frame[45] = 0x00;
+        frame[46] = 0x00; frame[47] = 0x00;
+        frame[48] = fn;
+        
+        memset(m_fich, 0x00, 6);
+        fich_set_fi(1);
+        fich_set_cs(2);
+        fich_set_cm(0);
+        fich_set_fn(fn >> 1);
+        fich_set_ft(1);              // FT=1: Final
+        fich_set_mr(0);
+        fich_set_voip(false);
+        m_fich[3] = forced_dgid;     // ← MANTENER DGID HASTA EL FINAL
         
         fich_encode(frame + 40);
         
-        // PAYLOAD: Datos de voz simulados (patrón de prueba)
-        for (int j = 55; j < 155; j++) {
-            frame[j] = (j % 256); // Patrón de prueba
-        }
-        
         sendto(udp_sock, frame, 155, 0, (struct sockaddr *)host, sizeof(*host));
         
-        fn += 2;
-        usleep(100000); // 100ms
+        if (i < 2) {
+            ts.tv_sec = 0;
+            ts.tv_nsec = 100000000L;
+            nanosleep(&ts, NULL);
+        }
     }
-
-    /* ================================================== */
-    /* 3. FRAME DE TERMINACIÓN (1 frame final) */
-    /* ================================================== */
-    fprintf(stderr, "Enviando frame de terminación...\n");
-    memset(frame, 0x00, 155);
     
-    // HEADER YSF
-    memcpy(frame, "YSFD", 4);
-    memcpy(frame + 4, callsign, 10);      // Source
-    memcpy(frame + 14, "ALL       ", 10); // Destination: ALL
-    memcpy(frame + 24, callsign, 10);     // Transmitter
-    memset(frame + 34, ' ', 10);          // Receiver
-    memset(frame + 44, ' ', 4);           // GPS + reserved
-    frame[48] = fn;                       // Frame number
-    
-    // FICH - Terminación (FT=1)
-    memset(m_fich, 0x00, 6);
-    fich_set_fi(1);        // FI=1: Voice Full Rate
-    fich_set_cs(2);        // CS=2: YSF
-    fich_set_cm(0);        // CM=0: Non-communication
-    fich_set_fn(fn >> 1);  // Frame number (div 2)
-    fich_set_ft(1);        // FT=1: Final frame! ← CLAVE!
-    fich_set_mr(0);        // MR=0: Not busy
-    fich_set_voip(false);  // No VoIP
-    m_fich[3] = forced_dgid; // DGID
-    
-    fich_encode(frame + 40);
-    
-    sendto(udp_sock, frame, 155, 0, (struct sockaddr *)host, sizeof(*host));
-
     fprintf(stderr, "Transmisión YSF completa enviada (DGID %02u)\n", forced_dgid);
 }
 
