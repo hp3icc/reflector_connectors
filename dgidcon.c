@@ -746,6 +746,7 @@ int max(int x, int y)
 /* ============================================================= */
 /* DECLARACIONES DE FUNCIONES FICH (para evitar warnings)      */
 /* ============================================================= */
+void fich_set_dt(unsigned char dt);
 void fich_set_fi(unsigned char fi);
 void fich_set_cs(unsigned char cs);
 void fich_set_cm(unsigned char cm);
@@ -791,30 +792,31 @@ void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t force
         
         // Header YSF
         memcpy(frame, "YSFD", 4);
-        memcpy(frame + 4, callsign, 10);        // Source
-        memcpy(frame + 14, callsign, 10);       // Destination (self)
-        memcpy(frame + 24, "ALL       ", 10);   // Transmitter
-        memcpy(frame + 34, "          ", 10);   // Receiver
-        frame[44] = 0x00; frame[45] = 0x00;     // GPS
-        frame[46] = 0x00; frame[47] = 0x00;     // Reserved
-        frame[48] = fn;                         // Frame number
+        memcpy(frame + 4, callsign, 10);
+        memcpy(frame + 14, callsign, 10);
+        memcpy(frame + 24, "ALL       ", 10);
+        memcpy(frame + 34, "          ", 10);
+        frame[44] = 0x00; frame[45] = 0x00;
+        frame[46] = 0x00; frame[47] = 0x00;
+        frame[48] = fn;
         
-        // FICH - Header Frame - IMPORTANTE: DGID en posición correcta
+        // FICH - Header Frame (CONFIGURACIÓN ORIGINAL QUE FUNCIONA)
         memset(m_fich, 0x00, 6);
         fich_set_fi(0);              // FI=0: Header
-        fich_set_cs(2);              // CS=2: YSF
-        fich_set_cm(0);              // CM=0: Non-communication  
-        fich_set_fn(fn >> 1);        // Frame number
-        fich_set_ft(0);              // FT=0: Not final
-        fich_set_mr(0);              // MR=0: Not busy
+        fich_set_cs(2);              // CS=2: YSF  
+        fich_set_cm(0);              // CM=0: Non-communication (ORIGINAL)
+        fich_set_fn(fn >> 1);
+        fich_set_ft(1);
+        fich_set_mr(0);
+        fich_set_dt(2);
         fich_set_voip(false);
         
-        // DGID DEBE IR EN BYTE 3 DEL FICH (posición 0-5)
-        m_fich[3] = forced_dgid;     // ← ESTA ES LA POSICIÓN CORRECTA
+        m_fich[3] = forced_dgid;
         
         fich_encode(frame + 40);
         
         sendto(udp_sock, frame, 155, 0, (struct sockaddr *)host, sizeof(*host));
+//        fprintf(stderr, "✓ Header frame %d enviado\n", i);
         fn += 2;
         
         ts.tv_sec = 0;
@@ -822,35 +824,36 @@ void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t force
         nanosleep(&ts, NULL);
     }
     
-    // 2. VOICE FRAMES - MANTENER EL MISMO DGID
+    // 2. VOICE FRAMES (CONFIGURACIÓN ORIGINAL QUE FUNCIONA)
     fprintf(stderr, "Enviando frames de voz...\n");
     for (int i = 0; i < 20; i++) {
         memset(frame, 0x00, 155);
         
         memcpy(frame, "YSFD", 4);
         memcpy(frame + 4, callsign, 10);
-        memcpy(frame + 14, callsign       , 10);   // Destination: ALL
+        memcpy(frame + 14, callsign, 10);
         memcpy(frame + 24, "ALL       ", 10);
         memcpy(frame + 34, "          ", 10);
         frame[44] = 0x00; frame[45] = 0x00;
         frame[46] = 0x00; frame[47] = 0x00;
         frame[48] = fn;
         
-        // FICH - Voice Frame - MANTENER EL DGID
         memset(m_fich, 0x00, 6);
-        fich_set_fi(1);              // FI=1: Voice Full Rate
+        fich_set_fi(2);              // FI=1: Voice Full Rate (ORIGINAL)
         fich_set_cs(2);              // CS=2: YSF
-        fich_set_cm(0);        
+        fich_set_cm(1);              // CM=0: Non-communication (ORIGINAL)
         fich_set_fn(fn >> 1);
         fich_set_ft(0);
         fich_set_mr(0);
+        fich_set_dt(2);
         fich_set_voip(false);
-        m_fich[3] = forced_dgid;     // ← MANTENER EL MISMO DGID
+        m_fich[3] = forced_dgid;
         
         fich_encode(frame + 40);
         generate_voice_payload(frame + 55, i);
         
         sendto(udp_sock, frame, 155, 0, (struct sockaddr *)host, sizeof(*host));
+//        fprintf(stderr, "✓ Voice frame %d enviado\n", i);
         fn += 2;
         
         ts.tv_sec = 0;
@@ -858,14 +861,14 @@ void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t force
         nanosleep(&ts, NULL);
     }
     
-    // 3. TERMINATION
+    // 3. TERMINATION (CONFIGURACIÓN ORIGINAL QUE FUNCIONA)
     fprintf(stderr, "Enviando frame de terminación...\n");
     for (int i = 0; i < 3; i++) {
         memset(frame, 0x00, 155);
         
         memcpy(frame, "YSFD", 4);
         memcpy(frame + 4, callsign, 10);
-        memcpy(frame + 14, callsign       , 10);
+        memcpy(frame + 14, callsign, 10);
         memcpy(frame + 24, "ALL       ", 10);
         memcpy(frame + 34, "          ", 10);
         frame[44] = 0x00; frame[45] = 0x00;
@@ -873,18 +876,20 @@ void send_activation_burst(int udp_sock, struct sockaddr_in *host, uint8_t force
         frame[48] = fn;
         
         memset(m_fich, 0x00, 6);
-        fich_set_fi(1);
+        fich_set_fi(2);
         fich_set_cs(2);
-        fich_set_cm(0);
+        fich_set_cm(1);              // CM=0: Non-communication (ORIGINAL)
         fich_set_fn(fn >> 1);
         fich_set_ft(1);              // FT=1: Final
         fich_set_mr(0);
+        fich_set_dt(2);
         fich_set_voip(false);
-        m_fich[3] = forced_dgid;     // ← MANTENER DGID HASTA EL FINAL
+        m_fich[3] = forced_dgid;
         
         fich_encode(frame + 40);
         
         sendto(udp_sock, frame, 155, 0, (struct sockaddr *)host, sizeof(*host));
+//        fprintf(stderr, "✓ Termination frame %d enviado\n", i);
         
         if (i < 2) {
             ts.tv_sec = 0;
@@ -1075,6 +1080,7 @@ void fich_encode(unsigned char* bytes)
 }
 
 /* Implementación de las funciones FICH (ahora al final para que compilen correctamente) */
+void fich_set_dt(unsigned char dt)  { m_fich[2U] &= 0x3FU; m_fich[2U] |= (dt << 6) & 0xC0U; }
 void fich_set_fi(unsigned char fi)  { m_fich[0U] &= 0x3FU; m_fich[0U] |= (fi << 6) & 0xC0U; }
 void fich_set_cs(unsigned char cs)  { m_fich[0U] &= 0xCFU; m_fich[0U] |= (cs << 4) & 0x30U; }
 void fich_set_cm(unsigned char cm)  { m_fich[0U] &= 0xF3U; m_fich[0U] |= (cm << 2) & 0x0CU; }
