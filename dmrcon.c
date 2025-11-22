@@ -40,7 +40,7 @@
 #include <sys/ioctl.h>
 
 #define BUFSIZE 2048
-#define TIMEOUT 120
+#define TIMEOUT 30
 //#define DEBUG
 #define SWAP(n) (((n) << 24) | (((n) & 0xff00) << 8) | (((n) >> 8) & 0xff00) | ((n) >> 24))
 #define K(I) roundConstants[I]
@@ -197,19 +197,15 @@ time_t last_activity2 = 0;
 
 static const unsigned char fillbuf[64] = { 0x80, 0 };
 
-// --- Función para obtener el ID de DMR con 7 dígitos si está habilitada la opción correspondiente ---
-int get_dmrid(int host_num) {
+// --- Función para obtener el ID de DMR SIMPLIFICADA ---
+int get_dmrid(int host_num, int for_traffic) {
     int id_to_use = dmrid;
-#if defined(USE_7DIGIT_ID_PEER1)
-    if (host_num == 1) {
-        id_to_use = dmrid / 100;
+
+    // SIEMPRE convertir 9 dígitos a 7 para cualquier uso
+    if (dmrid > 9999999) {
+        id_to_use = dmrid / 100;  // Convertir 9->7 dígitos
     }
-#endif
-#if defined(USE_7DIGIT_ID_PEER2)
-    if (host_num == 2) {
-        id_to_use = dmrid / 100;
-    }
-#endif
+
     return id_to_use;
 }
 
@@ -259,10 +255,10 @@ void process_signal(int sig)
         b[2] = 'T';
         b[3] = 'C';
         b[4] = 'L';
-        b[5] = (dmrid >> 24) & 0xff;
-        b[6] = (dmrid >> 16) & 0xff;
-        b[7] = (dmrid >> 8) & 0xff;
-        b[8] = (dmrid >> 0) & 0xff;
+        b[5] = (get_dmrid(1, 0) >> 24) & 0xff;
+        b[6] = (get_dmrid(1, 0) >> 16) & 0xff;
+        b[7] = (get_dmrid(1, 0) >> 8) & 0xff;
+        b[8] = (get_dmrid(1, 0) >> 0) & 0xff;
         
         if (host1_connect_status == CONNECTED) {
             sendto(udp1, b, 9, 0, (const struct sockaddr *)&host1, sizeof(host1));
@@ -288,10 +284,10 @@ void process_signal(int sig)
         uint8_t b[20];
         char tag[] = { 'R','P','T','P','I','N','G' };
         memcpy(b, tag, 7);
-        b[7] = (dmrid >> 24) & 0xff;
-        b[8] = (dmrid >> 16) & 0xff;
-        b[9] = (dmrid >> 8) & 0xff;
-        b[10] = (dmrid >> 0) & 0xff;
+        b[7] = (get_dmrid(1, 0) >> 24) & 0xff;
+        b[8] = (get_dmrid(1, 0) >> 16) & 0xff;
+        b[9] = (get_dmrid(1, 0) >> 8) & 0xff;
+        b[10] = (get_dmrid(1, 0) >> 0) & 0xff;
         
         if (host1_connect_status == CONNECTED) {
             sendto(udp1, b, 11, 0, (const struct sockaddr *)&host1, sizeof(host1));
@@ -804,10 +800,10 @@ int process_connect(int connect_status, char *buf, int h)
         connect_status = CONNECTING;
         memcpy(in, &buf[6], 4); // Copiar el random seed
         memcpy(out, "RPTK", 4);
-        out[4] = (get_dmrid(h) >> 24) & 0xff;
-        out[5] = (get_dmrid(h) >> 16) & 0xff;
-        out[6] = (get_dmrid(h) >> 8) & 0xff;
-        out[7] = (get_dmrid(h) >> 0) & 0xff;
+        out[4] = (get_dmrid(h, 0) >> 24) & 0xff;
+        out[5] = (get_dmrid(h, 0) >> 16) & 0xff;
+        out[6] = (get_dmrid(h, 0) >> 8) & 0xff;
+        out[7] = (get_dmrid(h, 0) >> 0) & 0xff;
         
         if(h == 1){
             memcpy(&in[4], host1_pw, strlen(host1_pw));
@@ -852,10 +848,10 @@ void send_configuration(int h)
     memset(out, 0, 400);
     
     memcpy(out, "RPTC", 4);
-    out[4] = (get_dmrid(h) >> 24) & 0xff;
-    out[5] = (get_dmrid(h) >> 16) & 0xff;
-    out[6] = (get_dmrid(h) >> 8) & 0xff;
-    out[7] = (get_dmrid(h) >> 0) & 0xff;
+    out[4] = (get_dmrid(h, 0) >> 24) & 0xff;
+    out[5] = (get_dmrid(h, 0) >> 16) & 0xff;
+    out[6] = (get_dmrid(h, 0) >> 8) & 0xff;
+    out[7] = (get_dmrid(h, 0) >> 0) & 0xff;
     sprintf(latitude, "%08f", 50.0f);
     sprintf(longitude, "%09f", 3.0f);
     sprintf(&out[8], "%-8.8s%09u%09u%02u%02u%8.8s%9.9s%03d%-20.20s%-19.19s%c%-124.124s%-40.40s%-40.40s", callsign,
@@ -888,9 +884,9 @@ void send_initial_ptt(int h)
     // HEADER
     memcpy(buf, "DMRD", 4);
     buf[4] = 0x00;
-    buf[5] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 16 & 0xff;
-    buf[6] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 8 & 0xff;
-    buf[7] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 0 & 0xff;
+    buf[5] = ((get_dmrid(h, 1) > 99999999) ? get_dmrid(h, 1)/100 : get_dmrid(h, 1)) >> 16 & 0xff;
+    buf[6] = ((get_dmrid(h, 1) > 99999999) ? get_dmrid(h, 1)/100 : get_dmrid(h, 1)) >> 8 & 0xff;
+    buf[7] = ((get_dmrid(h, 1) > 99999999) ? get_dmrid(h, 1)/100 : get_dmrid(h, 1)) >> 0 & 0xff;
     if(h == 1){
         buf[8] = (host1_tg >> 16) & 0xff;
         buf[9] = (host1_tg >> 8) & 0xff;
@@ -900,10 +896,10 @@ void send_initial_ptt(int h)
         buf[9] = (host2_tg >> 8) & 0xff;
         buf[10] = (host2_tg >> 0) & 0xff;
     }
-    buf[11] = (get_dmrid(h) >> 24) & 0xff;
-    buf[12] = (get_dmrid(h) >> 16) & 0xff;
-    buf[13] = (get_dmrid(h) >> 8) & 0xff;
-    buf[14] = (get_dmrid(h) >> 0) & 0xff;
+    buf[11] = (get_dmrid(h, 1) >> 24) & 0xff;
+    buf[12] = (get_dmrid(h, 1) >> 16) & 0xff;
+    buf[13] = (get_dmrid(h, 1) >> 8) & 0xff;
+    buf[14] = (get_dmrid(h, 1) >> 0) & 0xff;
     buf[15] = 0x80 | (2 << 4) | 1;
     *(uint32_t *)(&buf[16]) = stream_id;
     generate_header();
@@ -915,9 +911,9 @@ void send_initial_ptt(int h)
     for (int i = 0; i < total_frames; i++) {
         memcpy(buf, "DMRD", 4);
         buf[4] = (i + 1) % 256;
-        buf[5] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 16 & 0xff;
-        buf[6] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 8 & 0xff;
-        buf[7] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 0 & 0xff;
+        buf[5] = ((get_dmrid(h, 1) > 99999999) ? get_dmrid(h, 1)/100 : get_dmrid(h, 1)) >> 16 & 0xff;
+        buf[6] = ((get_dmrid(h, 1) > 99999999) ? get_dmrid(h, 1)/100 : get_dmrid(h, 1)) >> 8 & 0xff;
+        buf[7] = ((get_dmrid(h, 1) > 99999999) ? get_dmrid(h, 1)/100 : get_dmrid(h, 1)) >> 0 & 0xff;
         if(h == 1){
             buf[8] = (host1_tg >> 16) & 0xff;
             buf[9] = (host1_tg >> 8) & 0xff;
@@ -927,10 +923,10 @@ void send_initial_ptt(int h)
             buf[9] = (host2_tg >> 8) & 0xff;
             buf[10] = (host2_tg >> 0) & 0xff;
         }
-        buf[11] = (get_dmrid(h) >> 24) & 0xff;
-        buf[12] = (get_dmrid(h) >> 16) & 0xff;
-        buf[13] = (get_dmrid(h) >> 8) & 0xff;
-        buf[14] = (get_dmrid(h) >> 0) & 0xff;
+        buf[11] = (get_dmrid(h, 1) >> 24) & 0xff;
+        buf[12] = (get_dmrid(h, 1) >> 16) & 0xff;
+        buf[13] = (get_dmrid(h, 1) >> 8) & 0xff;
+        buf[14] = (get_dmrid(h, 1) >> 0) & 0xff;
         if (i % 6 == 0) {
             buf[15] = 0x80 | (1 << 4) | ((i / 6) % 6);
         } else {
@@ -959,9 +955,9 @@ void send_initial_ptt(int h)
     // TERMINATOR
     memcpy(buf, "DMRD", 4);
     buf[4] = (total_frames + 1) % 256;
-    buf[5] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 16 & 0xff;
-    buf[6] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 8 & 0xff;
-    buf[7] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 0 & 0xff;
+    buf[5] = ((get_dmrid(h, 1) > 99999999) ? get_dmrid(h, 1)/100 : get_dmrid(h, 1)) >> 16 & 0xff;
+    buf[6] = ((get_dmrid(h, 1) > 99999999) ? get_dmrid(h, 1)/100 : get_dmrid(h, 1)) >> 8 & 0xff;
+    buf[7] = ((get_dmrid(h, 1) > 99999999) ? get_dmrid(h, 1)/100 : get_dmrid(h, 1)) >> 0 & 0xff;
     if(h == 1){
         buf[8] = (host1_tg >> 16) & 0xff;
         buf[9] = (host1_tg >> 8) & 0xff;
@@ -971,10 +967,10 @@ void send_initial_ptt(int h)
         buf[9] = (host2_tg >> 8) & 0xff;
         buf[10] = (host2_tg >> 0) & 0xff;
     }
-    buf[11] = (get_dmrid(h) >> 24) & 0xff;
-    buf[12] = (get_dmrid(h) >> 16) & 0xff;
-    buf[13] = (get_dmrid(h) >> 8) & 0xff;
-    buf[14] = (get_dmrid(h) >> 0) & 0xff;
+    buf[11] = (get_dmrid(h, 1) >> 24) & 0xff;
+    buf[12] = (get_dmrid(h, 1) >> 16) & 0xff;
+    buf[13] = (get_dmrid(h, 1) >> 8) & 0xff;
+    buf[14] = (get_dmrid(h, 1) >> 0) & 0xff;
     buf[15] = 0x80 | (2 << 4) | 2;
     *(uint32_t *)(&buf[16]) = stream_id;
     generate_header();
@@ -1072,10 +1068,10 @@ int main(int argc, char **argv)
             buf[1] = 'P';
             buf[2] = 'T';
             buf[3] = 'L';
-            buf[4] = (get_dmrid(1) >> 24) & 0xff;
-            buf[5] = (get_dmrid(1) >> 16) & 0xff;
-            buf[6] = (get_dmrid(1) >> 8) & 0xff;
-            buf[7] = (get_dmrid(1) >> 0) & 0xff;
+            buf[4] = (get_dmrid(1, 0) >> 24) & 0xff;
+            buf[5] = (get_dmrid(1, 0) >> 16) & 0xff;
+            buf[6] = (get_dmrid(1, 0) >> 8) & 0xff;
+            buf[7] = (get_dmrid(1, 0) >> 0) & 0xff;
             sendto(udp1, buf, 8, 0, (const struct sockaddr *)&host1, sizeof(host1));
 #ifdef DEBUG
             fprintf(stderr, "SEND DMR1 RPTL: ");
@@ -1093,10 +1089,10 @@ int main(int argc, char **argv)
             buf[1] = 'P';
             buf[2] = 'T';
             buf[3] = 'L';
-            buf[4] = (get_dmrid(2) >> 24) & 0xff;
-            buf[5] = (get_dmrid(2) >> 16) & 0xff;
-            buf[6] = (get_dmrid(2) >> 8) & 0xff;
-            buf[7] = (get_dmrid(2) >> 0) & 0xff;
+            buf[4] = (get_dmrid(2, 0) >> 24) & 0xff;
+            buf[5] = (get_dmrid(2, 0) >> 16) & 0xff;
+            buf[6] = (get_dmrid(2, 0) >> 8) & 0xff;
+            buf[7] = (get_dmrid(2, 0) >> 0) & 0xff;
             sendto(udp2, buf, 8, 0, (const struct sockaddr *)&host2, sizeof(host2));
 #ifdef DEBUG
             fprintf(stderr, "SEND DMR2 RPTL: ");
@@ -1178,7 +1174,7 @@ int main(int argc, char **argv)
             if( (host1_connect_status == CONNECTED) && (rxlen == 55) && (memcmp(buf, "DMRD", 4) == 0) ){
                 rx_srcid = ((buf[5] << 16) & 0xff0000) | ((buf[6] << 8) & 0xff00) | (buf[7] & 0xff);
                 if(rx_srcid == 0){
-                    rx_srcid = ((get_dmrid(1) > 99999999) ? get_dmrid(1)/100 : get_dmrid(1));
+                    rx_srcid = ((get_dmrid(1, 1) > 99999999) ? get_dmrid(1, 1)/100 : get_dmrid(1, 1));
                     buf[5] = (rx_srcid >> 16) & 0xff;
                     buf[6] = (rx_srcid >> 8) & 0xff;
                     buf[7] = (rx_srcid >> 0) & 0xff;
@@ -1187,10 +1183,10 @@ int main(int argc, char **argv)
                 buf[8] = (host2_tg >> 16) & 0xff;
                 buf[9] = (host2_tg >> 8) & 0xff;
                 buf[10] = (host2_tg >> 0) & 0xff;
-                buf[11] = (get_dmrid(2) >> 24) & 0xff;
-                buf[12] = (get_dmrid(2) >> 16) & 0xff;
-                buf[13] = (get_dmrid(2) >> 8) & 0xff;
-                buf[14] = (get_dmrid(2) >> 0) & 0xff;
+                buf[11] = (get_dmrid(2, 1) >> 24) & 0xff;
+                buf[12] = (get_dmrid(2, 1) >> 16) & 0xff;
+                buf[13] = (get_dmrid(2, 1) >> 8) & 0xff;
+                buf[14] = (get_dmrid(2, 1) >> 0) & 0xff;
                 if ( *(uint32_t *)(&buf[16]) == 0 )
                     *(uint32_t *)(&buf[16]) = 100;
                 if(buf[15] > 0x90){
@@ -1249,7 +1245,7 @@ int main(int argc, char **argv)
             if( (host2_connect_status == CONNECTED) && (rxlen == 55) && (memcmp(buf, "DMRD", 4) == 0) ){
                 rx_srcid = ((buf[5] << 16) & 0xff0000) | ((buf[6] << 8) & 0xff00) | (buf[7] & 0xff);
                 if(rx_srcid == 0){
-                    rx_srcid = ((get_dmrid(2) > 99999999) ? get_dmrid(2)/100 : get_dmrid(2));
+                    rx_srcid = ((get_dmrid(2, 1) > 99999999) ? get_dmrid(2, 1)/100 : get_dmrid(2, 1));
                     buf[5] = (rx_srcid >> 16) & 0xff;
                     buf[6] = (rx_srcid >> 8) & 0xff;
                     buf[7] = (rx_srcid >> 0) & 0xff;
@@ -1258,10 +1254,10 @@ int main(int argc, char **argv)
                 buf[8] = (host1_tg >> 16) & 0xff;
                 buf[9] = (host1_tg >> 8) & 0xff;
                 buf[10] = (host1_tg >> 0) & 0xff;
-                buf[11] = (get_dmrid(1) >> 24) & 0xff;
-                buf[12] = (get_dmrid(1) >> 16) & 0xff;
-                buf[13] = (get_dmrid(1) >> 8) & 0xff;
-                buf[14] = (get_dmrid(1) >> 0) & 0xff;
+                buf[11] = (get_dmrid(1, 1) >> 24) & 0xff;
+                buf[12] = (get_dmrid(1, 1) >> 16) & 0xff;
+                buf[13] = (get_dmrid(1, 1) >> 8) & 0xff;
+                buf[14] = (get_dmrid(1, 1) >> 0) & 0xff;
                 if ( *(uint32_t *)(&buf[16]) == 0 )
                     *(uint32_t *)(&buf[16]) = 100;
                 if(buf[15] > 0x90){
