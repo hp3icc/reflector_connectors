@@ -197,13 +197,34 @@ time_t last_activity2 = 0;
 
 static const unsigned char fillbuf[64] = { 0x80, 0 };
 
-// --- Función para obtener el ID de DMR SIMPLIFICADA ---
+// --- Función para obtener el ID de DMR CORREGIDA ---
 int get_dmrid(int host_num, int for_traffic) {
     int id_to_use = dmrid;
 
-    // SIEMPRE convertir 9 dígitos a 7 para cualquier uso
-    if (dmrid > 9999999) {
-        id_to_use = dmrid / 100;  // Convertir 9->7 dígitos
+    if (for_traffic) {
+        // PARA TRÁFICO (PTT inicial, DMRD): usar conversión según configuración
+#if defined(USE_7DIGIT_ID_PEER1)
+        if (host_num == 1 && dmrid > 9999999) {
+            id_to_use = dmrid / 100;  // Convertir 9->7 dígitos para tráfico
+        }
+#endif
+#if defined(USE_7DIGIT_ID_PEER2)
+        if (host_num == 2 && dmrid > 9999999) {
+            id_to_use = dmrid / 100;  // Convertir 9->7 dígitos para tráfico
+        }
+#endif
+    } else {
+        // PARA LOGIN/AUTENTICACIÓN: usar conversión según configuración
+#if defined(USE_7DIGIT_ID_PEER1)
+        if (host_num == 1 && dmrid > 9999999) {
+            id_to_use = dmrid / 100;  // Convertir 9->7 dígitos para login
+        }
+#endif
+#if defined(USE_7DIGIT_ID_PEER2)
+        if (host_num == 2 && dmrid > 9999999) {
+            id_to_use = dmrid / 100;  // Convertir 9->7 dígitos para login
+        }
+#endif
     }
 
     return id_to_use;
