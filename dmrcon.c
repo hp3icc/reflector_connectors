@@ -270,21 +270,24 @@ void process_signal(int sig)
 {
     if(sig == SIGINT){
         fprintf(stderr, "\nShutting down link\n");
-        uint8_t b[20];
-        b[0] = 'R';
-        b[1] = 'P';
-        b[2] = 'T';
-        b[3] = 'C';
-        b[4] = 'L';
-        b[5] = (get_dmrid(1, 0) >> 24) & 0xff;
-        b[6] = (get_dmrid(1, 0) >> 16) & 0xff;
-        b[7] = (get_dmrid(1, 0) >> 8) & 0xff;
-        b[8] = (get_dmrid(1, 0) >> 0) & 0xff;
         
         if (host1_connect_status == CONNECTED) {
+            uint8_t b[20];
+            b[0] = 'R'; b[1] = 'P'; b[2] = 'T'; b[3] = 'C'; b[4] = 'L';
+            b[5] = (get_dmrid(1, 0) >> 24) & 0xff;
+            b[6] = (get_dmrid(1, 0) >> 16) & 0xff;
+            b[7] = (get_dmrid(1, 0) >> 8) & 0xff;
+            b[8] = (get_dmrid(1, 0) >> 0) & 0xff;
             sendto(udp1, b, 9, 0, (const struct sockaddr *)&host1, sizeof(host1));
         }
+        
         if (host2_connect_status == CONNECTED) {
+            uint8_t b[20];
+            b[0] = 'R'; b[1] = 'P'; b[2] = 'T'; b[3] = 'C'; b[4] = 'L';
+            b[5] = (get_dmrid(2, 0) >> 24) & 0xff;
+            b[6] = (get_dmrid(2, 0) >> 16) & 0xff;
+            b[7] = (get_dmrid(2, 0) >> 8) & 0xff;
+            b[8] = (get_dmrid(2, 0) >> 0) & 0xff;
             sendto(udp2, b, 9, 0, (const struct sockaddr *)&host2, sizeof(host2));
         }
         
@@ -302,31 +305,31 @@ void process_signal(int sig)
     }
     
     if(sig == SIGALRM){
-        uint8_t b[20];
-        char tag[] = { 'R','P','T','P','I','N','G' };
-        memcpy(b, tag, 7);
-        b[7] = (get_dmrid(1, 0) >> 24) & 0xff;
-        b[8] = (get_dmrid(1, 0) >> 16) & 0xff;
-        b[9] = (get_dmrid(1, 0) >> 8) & 0xff;
-        b[10] = (get_dmrid(1, 0) >> 0) & 0xff;
-        
+        // NECESITAS SEPARAR LOS PINGS TAMBIÉN
         if (host1_connect_status == CONNECTED) {
+            uint8_t b[20];
+            char tag[] = { 'R','P','T','P','I','N','G' };
+            memcpy(b, tag, 7);
+            b[7] = (get_dmrid(1, 0) >> 24) & 0xff;  // Específico para host1
+            b[8] = (get_dmrid(1, 0) >> 16) & 0xff;
+            b[9] = (get_dmrid(1, 0) >> 8) & 0xff;
+            b[10] = (get_dmrid(1, 0) >> 0) & 0xff;
             sendto(udp1, b, 11, 0, (const struct sockaddr *)&host1, sizeof(host1));
             ping_missed1++;
         }
+        
         if (host2_connect_status == CONNECTED) {
+            uint8_t b[20];
+            char tag[] = { 'R','P','T','P','I','N','G' };
+            memcpy(b, tag, 7);
+            b[7] = (get_dmrid(2, 0) >> 24) & 0xff;  // Específico para host2
+            b[8] = (get_dmrid(2, 0) >> 16) & 0xff;
+            b[9] = (get_dmrid(2, 0) >> 8) & 0xff;
+            b[10] = (get_dmrid(2, 0) >> 0) & 0xff;
             sendto(udp2, b, 11, 0, (const struct sockaddr *)&host2, sizeof(host2));
             ping_missed2++;
         }
         
-#ifdef DEBUG
-        fprintf(stderr, "SEND BOTH: ");
-        for(int i = 0; i < 11; ++i){
-            fprintf(stderr, "%02x ", b[i]);
-        }
-        fprintf(stderr, "\n");
-        fflush(stderr);
-#endif
         alarm(5);
     }
 }
