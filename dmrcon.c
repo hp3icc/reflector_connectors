@@ -1,5 +1,6 @@
 /*
     DMRCon - DMR Server/TG Connector
+    Copyright (C) 2025 mod by Esteban Mackay HP3ICC
     Copyright (C) 2019 Doug McLain
     Based on code from https://github.com/juribeparada/MMDVM_CM
     This program is free software: you can redistribute it and/or modify
@@ -37,11 +38,18 @@
 #include <arpa/inet.h> 
 #include <netinet/in.h>
 #include <sys/ioctl.h>
+
 #define BUFSIZE 2048
-#define TIMEOUT 60
+#define TIMEOUT 120
 //#define DEBUG
 #define SWAP(n) (((n) << 24) | (((n) & 0xff00) << 8) | (((n) >> 8) & 0xff00) | ((n) >> 24))
 #define K(I) roundConstants[I]
+
+// Connection status constants - SIMPLIFIED like YSF2DMR
+#define DISCONNECTED    0
+#define CONNECTING      1
+#define CONNECTED       2
+
 static const uint32_t roundConstants[64] = {
     0x428a2f98UL, 0x71374491UL, 0xb5c0fbcfUL, 0xe9b5dba5UL,
     0x3956c25bUL, 0x59f111f1UL, 0x923f82a4UL, 0xab1c5ed5UL,
@@ -150,52 +158,56 @@ const uint32_t ENCODING_TABLE_1676[] =
      0xD97AU, 0xDB09U, 0xDD9FU, 0xDFECU, 0xE0E6U, 0xE295U, 0xE403U, 0xE670U, 0xE92FU, 0xEB5CU, 0xEDCAU, 0xEFB9U,
      0xF104U, 0xF377U, 0xF5E1U, 0xF792U, 0xF8CDU, 0xFABEU, 0xFC28U, 0xFE5BU
 };
+
 #define F2(A,B,C) ( ( A & B ) | ( C & ( A | B ) ) )
 #define F1(E,F,G) ( G ^ ( E & ( F ^ G ) ) )
-struct sockaddr_in 	host1;
-struct sockaddr_in 	host2;
-int 				udp1;
-int 				udp2;
-fd_set 				udpset; 
-uint8_t 			buf[BUFSIZE];
-uint32_t			host1_cnt;
-uint32_t 			host2_cnt;
-char 				callsign[10U];
-int					dmrid;
-uint32_t			sha256_state[8U];
-uint32_t			sha256_total[2];
-uint32_t			sha256_buffer[32U];
-uint32_t			sha256_buflen;
-bool 				bptc_rawData[196];
-bool 				bptc_deInterData[196];
-bool 				emb_raw[128U];
-bool 				emb_data[72U];
-int					rx_srcid;
-int					tx_tgid;
-int					host1_tg;
-int					host2_tg;
-char				*host1_pw;
-char				*host2_pw;
+
+struct sockaddr_in   host1;
+struct sockaddr_in   host2;
+int                 udp1;
+int                 udp2;
+fd_set              udpset; 
+uint8_t             buf[BUFSIZE];
+uint32_t            host1_cnt;
+uint32_t            host2_cnt;
+char                callsign[10U];
+int                 dmrid;
+uint32_t            sha256_state[8U];
+uint32_t            sha256_total[2];
+uint32_t            sha256_buffer[32U];
+uint32_t            sha256_buflen;
+bool                bptc_rawData[196];
+bool                bptc_deInterData[196];
+bool                emb_raw[128U];
+bool                emb_data[72U];
+int                 rx_srcid;
+int                 tx_tgid;
+int                 host1_tg;
+int                 host2_tg;
+char                *host1_pw;
+char                *host2_pw;
+
+// Variables de estado de conexión - SIMPLIFICADAS
+int host1_connect_status = DISCONNECTED;
+int host2_connect_status = DISCONNECTED;
+uint32_t ping_missed1 = 0;
+uint32_t ping_missed2 = 0;
+time_t last_activity1 = 0;
+time_t last_activity2 = 0;
+
 static const unsigned char fillbuf[64] = { 0x80, 0 };
-#define DISCONNECTED	0
-#define CONNECTING		1
-#define DMR_AUTH		2
-#define DMR_CONF		3
-#define DMR_OPTS		4
-#define CONNECTED_RW	5
-#define CONNECTED_RO	6
 
 // --- Función para obtener el ID de DMR con 7 dígitos si está habilitada la opción correspondiente ---
 int get_dmrid(int host_num) {
     int id_to_use = dmrid;
 #if defined(USE_7DIGIT_ID_PEER1)
     if (host_num == 1) {
-        id_to_use = dmrid / 100;  // Acortar a 7 dígitos
+        id_to_use = dmrid / 100;
     }
 #endif
 #if defined(USE_7DIGIT_ID_PEER2)
     if (host_num == 2) {
-        id_to_use = dmrid / 100;  // Acortar a 7 dígitos
+        id_to_use = dmrid / 100;
     }
 #endif
     return id_to_use;
@@ -236,16 +248,12 @@ static inline void set_uint32(unsigned char* cp, uint32_t v)
     memcpy(cp, &v, sizeof v);
 }
 
-// --- signal handler ---
+// --- signal handler MEJORADO ---
 void process_signal(int sig)
 {
-    static uint32_t c1 = 0;
-    static uint32_t c2 = 0;
-    static int cnt = 0;
-    uint8_t b[20];
-    uint8_t out[55];
     if(sig == SIGINT){
         fprintf(stderr, "\nShutting down link\n");
+        uint8_t b[20];
         b[0] = 'R';
         b[1] = 'P';
         b[2] = 'T';
@@ -255,8 +263,14 @@ void process_signal(int sig)
         b[6] = (dmrid >> 16) & 0xff;
         b[7] = (dmrid >> 8) & 0xff;
         b[8] = (dmrid >> 0) & 0xff;
-        sendto(udp1, b, 9, 0, (const struct sockaddr *)&host1, sizeof(host1));
-        sendto(udp2, b, 9, 0, (const struct sockaddr *)&host2, sizeof(host2));
+        
+        if (host1_connect_status == CONNECTED) {
+            sendto(udp1, b, 9, 0, (const struct sockaddr *)&host1, sizeof(host1));
+        }
+        if (host2_connect_status == CONNECTED) {
+            sendto(udp2, b, 9, 0, (const struct sockaddr *)&host2, sizeof(host2));
+        }
+        
 #ifdef DEBUG
         fprintf(stderr, "SEND BOTH: ");
         for(int i = 0; i < 9; ++i){
@@ -269,16 +283,25 @@ void process_signal(int sig)
         close(udp2);
         exit(EXIT_SUCCESS);
     }
+    
     if(sig == SIGALRM){
-        ++cnt;
+        uint8_t b[20];
         char tag[] = { 'R','P','T','P','I','N','G' };
         memcpy(b, tag, 7);
         b[7] = (dmrid >> 24) & 0xff;
         b[8] = (dmrid >> 16) & 0xff;
         b[9] = (dmrid >> 8) & 0xff;
         b[10] = (dmrid >> 0) & 0xff;
-        sendto(udp1, b, 11, 0, (const struct sockaddr *)&host1, sizeof(host1));
-        sendto(udp2, b, 11, 0, (const struct sockaddr *)&host2, sizeof(host2));
+        
+        if (host1_connect_status == CONNECTED) {
+            sendto(udp1, b, 11, 0, (const struct sockaddr *)&host1, sizeof(host1));
+            ping_missed1++;
+        }
+        if (host2_connect_status == CONNECTED) {
+            sendto(udp2, b, 11, 0, (const struct sockaddr *)&host2, sizeof(host2));
+            ping_missed2++;
+        }
+        
 #ifdef DEBUG
         fprintf(stderr, "SEND BOTH: ");
         for(int i = 0; i < 11; ++i){
@@ -365,7 +388,7 @@ void bptc_encode(const unsigned char* in, unsigned char* out)
     //Interleave
     for (unsigned int i = 0U; i < 196U; i++)
         bptc_rawData[i] = false;
-    for (unsigned int a = 0U; a < 196U; a++)	{
+    for (unsigned int a = 0U; a < 196U; a++)    {
         unsigned int interleaveSequence = (a * 181U) % 196U;
         bptc_rawData[interleaveSequence] = bptc_deInterData[a];
     }
@@ -416,7 +439,7 @@ void generate_header()
     {
         memset(lc, 0, sizeof(lc));
         //DESTID/TGID
-        lc[3] = buf[8];		
+        lc[3] = buf[8];     
         lc[4] = buf[9];
         lc[5] = buf[10];
         //SRCID
@@ -478,9 +501,9 @@ void sha256_process_block(const unsigned char* buffer, unsigned int len)
     #define SS0(x) (rol(x,30)^rol(x,19)^rol(x,10))
     #define SS1(x) (rol(x,26)^rol(x,21)^rol(x,7))
     #define M(I) (tm = S1(x[(I-2)&0x0f]) + x[(I-7)&0x0f] + S0(x[(I-15)&0x0f]) + x[I&0x0f], x[I&0x0f] = tm)
-    #define R(A,B,C,D,E,F,G,H,K,M)  do { t0 = SS0(A) + F2(A,B,C);			\
-                         t1 = H + SS1(E) + F1(E,F,G) + K + M;	\
-                         D += t1;  H = t0 + t1;			\
+    #define R(A,B,C,D,E,F,G,H,K,M)  do { t0 = SS0(A) + F2(A,B,C);           \
+                         t1 = H + SS1(E) + F1(E,F,G) + K + M;   \
+                         D += t1;  H = t0 + t1;         \
                     } while(0)
     while (words < endp) {
         uint32_t tm;
@@ -765,7 +788,7 @@ void get_emb_data(uint8_t* data, uint8_t lcss)
     data[19U] = (data[19U] & 0x0FU) | ((DMREMB[1U] << 4U) & 0xF0U);
 }
 
-// --- FUNCIÓN MODIFICADA: process_connect (con PTT_DELAY y PTT_TIME) ---
+// --- FUNCIÓN DE CONEXIÓN CORREGIDA ---
 int process_connect(int connect_status, char *buf, int h)
 {
     char in[100];
@@ -774,15 +797,18 @@ int process_connect(int connect_status, char *buf, int h)
     char latitude[20U], longitude[20U];
     memset(in, 0, 100);
     memset(out, 0, 400);
+    
     switch(connect_status){
     case CONNECTING:
-        connect_status = DMR_AUTH;
-        memcpy(in, &buf[6], 4);
+        // Enviar RPTK (autenticación)
+        connect_status = CONNECTING;
+        memcpy(in, &buf[6], 4); // Copiar el random seed
         memcpy(out, "RPTK", 4);
         out[4] = (get_dmrid(h) >> 24) & 0xff;
         out[5] = (get_dmrid(h) >> 16) & 0xff;
         out[6] = (get_dmrid(h) >> 8) & 0xff;
         out[7] = (get_dmrid(h) >> 0) & 0xff;
+        
         if(h == 1){
             memcpy(&in[4], host1_pw, strlen(host1_pw));
             sha256_generate(in, strlen(host1_pw) + sizeof(uint32_t), &out[8]);
@@ -792,205 +818,189 @@ int process_connect(int connect_status, char *buf, int h)
             sha256_generate(in, strlen(host2_pw) + sizeof(uint32_t), &out[8]);
         }
         len = 40;
-        fprintf(stderr, "Sending auth to DMR%d...\n", h);
-        break;
-    case DMR_AUTH:
-        connect_status = DMR_CONF;
-        memcpy(out, "RPTC", 4);
-        out[4] = (get_dmrid(h) >> 24) & 0xff;
-        out[5] = (get_dmrid(h) >> 16) & 0xff;
-        out[6] = (get_dmrid(h) >> 8) & 0xff;
-        out[7] = (get_dmrid(h) >> 0) & 0xff;
-        sprintf(latitude, "%08f", 50.0f);
-        sprintf(longitude, "%09f", 3.0f);
-        sprintf(&out[8], "%-8.8s%09u%09u%02u%02u%8.8s%9.9s%03d%-20.20s%-19.19s%c%-124.124s%-40.40s%-40.40s", callsign,
-                438800000, 438800000, 1, 1, latitude, longitude, 0, "DMR2DMR","DMR2DMR", '4', "www.qrz.com", "20190131", "MMDVM");
-        len = 302;
-        fprintf(stderr, "Sending conf to DMR%d...\n", h);
-        break;
-    case DMR_CONF:
-#ifdef FREEDMR_COMPAT1
+        
         if (h == 1) {
-            connect_status = DMR_OPTS;
-            memcpy(out, "RPTO", 4);
-            out[4] = (get_dmrid(h) >> 24) & 0xff;
-            out[5] = (get_dmrid(h) >> 16) & 0xff;
-            out[6] = (get_dmrid(h) >> 8) & 0xff;
-            out[7] = (get_dmrid(h) >> 0) & 0xff;
-            sprintf(&out[8], "TS2=%u;DIAL=0;VOICE=0;LANG=en_GB;SINGLE=0;TIMER=10;", host1_tg);
-            len = 8 + strlen(&out[8]);
-            fprintf(stderr, "Sending opts to DMR1...\n");
             sendto(udp1, out, len, 0, (const struct sockaddr *)&host1, sizeof(host1));
 #ifdef DEBUG
-            fprintf(stderr, "SEND DMR1: ");
+            fprintf(stderr, "SEND DMR1 RPTK: ");
             for(int i = 0; i < len; ++i) fprintf(stderr, "%02x ", (uint8_t)out[i]);
             fprintf(stderr, "\n");
 #endif
-            return connect_status;
-        }
-#endif
-#ifdef FREEDMR_COMPAT2
-        if (h == 2) {
-            connect_status = DMR_OPTS;
-            memcpy(out, "RPTO", 4);
-            out[4] = (get_dmrid(h) >> 24) & 0xff;
-            out[5] = (get_dmrid(h) >> 16) & 0xff;
-            out[6] = (get_dmrid(h) >> 8) & 0xff;
-            out[7] = (get_dmrid(h) >> 0) & 0xff;
-            sprintf(&out[8], "TS2=%u;DIAL=0;VOICE=0;LANG=en_GB;SINGLE=0;TIMER=10;", host2_tg);
-            len = 8 + strlen(&out[8]);
-            fprintf(stderr, "Sending opts to DMR2...\n");
+        } else {
             sendto(udp2, out, len, 0, (const struct sockaddr *)&host2, sizeof(host2));
 #ifdef DEBUG
-            fprintf(stderr, "SEND DMR2: ");
+            fprintf(stderr, "SEND DMR2 RPTK: ");
             for(int i = 0; i < len; ++i) fprintf(stderr, "%02x ", (uint8_t)out[i]);
             fprintf(stderr, "\n");
 #endif
-            return connect_status;
         }
-#endif
-        // Si no se usa compatibilidad, ir directamente a DMR_OPTS
-        connect_status = DMR_OPTS;
-        // No break: seguir al siguiente caso
-    case DMR_OPTS:
-        connect_status = CONNECTED_RW;
-
-        // >>> APLICAR PTT_DELAY <<<
-        if (PTT_DELAY > 0) {
-            sleep(PTT_DELAY);
-        }
-
-        // >>> ENVIAR RÁFAGA COMPLETA DE PTT_TIME SEGUNDOS <<<
-        uint32_t stream_id = (rand() % 0xFFFFFFFF) + 1;
-        int total_frames = PTT_TIME * 6; // 6 frames por segundo
-
-        // 1. Enviar HEADER
-        memcpy(buf, "DMRD", 4);
-        buf[4] = 0x00;
-        buf[5] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 16 & 0xff;
-        buf[6] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 8 & 0xff;
-        buf[7] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 0 & 0xff;
-        if(h == 1){
-            buf[8] = (host1_tg >> 16) & 0xff;
-            buf[9] = (host1_tg >> 8) & 0xff;
-            buf[10] = (host1_tg >> 0) & 0xff;
-        } else {
-            buf[8] = (host2_tg >> 16) & 0xff;
-            buf[9] = (host2_tg >> 8) & 0xff;
-            buf[10] = (host2_tg >> 0) & 0xff;
-        }
-        buf[11] = (get_dmrid(h) >> 24) & 0xff;
-        buf[12] = (get_dmrid(h) >> 16) & 0xff;
-        buf[13] = (get_dmrid(h) >> 8) & 0xff;
-        buf[14] = (get_dmrid(h) >> 0) & 0xff;
-        buf[15] = 0x80 | (2 << 4) | 1; // DATASYNC + HEADER
-        *(uint32_t *)(&buf[16]) = stream_id;
-        generate_header();
-        memcpy(out, buf, 55);
-        if(h == 1) sendto(udp1, out, 55, 0, (const struct sockaddr *)&host1, sizeof(host1));
-        else       sendto(udp2, out, 55, 0, (const struct sockaddr *)&host2, sizeof(host2));
-
-        // 2. Enviar FRAMES DE VOZ (silencio válido)
-        for (int i = 0; i < total_frames; i++) {
-            memcpy(buf, "DMRD", 4);
-            buf[4] = (i + 1) % 256;
-            buf[5] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 16 & 0xff;
-            buf[6] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 8 & 0xff;
-            buf[7] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 0 & 0xff;
-            if(h == 1){
-                buf[8] = (host1_tg >> 16) & 0xff;
-                buf[9] = (host1_tg >> 8) & 0xff;
-                buf[10] = (host1_tg >> 0) & 0xff;
-            } else {
-                buf[8] = (host2_tg >> 16) & 0xff;
-                buf[9] = (host2_tg >> 8) & 0xff;
-                buf[10] = (host2_tg >> 0) & 0xff;
-            }
-            buf[11] = (get_dmrid(h) >> 24) & 0xff;
-            buf[12] = (get_dmrid(h) >> 16) & 0xff;
-            buf[13] = (get_dmrid(h) >> 8) & 0xff;
-            buf[14] = (get_dmrid(h) >> 0) & 0xff;
-            if (i % 6 == 0) {
-                buf[15] = 0x80 | (1 << 4) | ((i / 6) % 6); // VOICESYNC
-            } else {
-                buf[15] = 0x80 | (0 << 4) | ((i / 6) % 6); // VOICE
-            }
-            *(uint32_t *)(&buf[16]) = stream_id;
-
-            // Silencio AMBE+2 válido
-            static const uint8_t silent_voice[27] = {
-                0x08,0x1C,0x0C,0x0E,0x0C,0x0C,0x08,0x0C,0x08,
-                0x08,0x0C,0x0C,0x0C,0x0C,0x08,0x0C,0x08,0x08,
-                0x0C,0x0C,0x0C,0x0C,0x08,0x0C,0x08,0x08,0x0C
-            };
-            memcpy(buf + 20, silent_voice, 27);
-
-            if (i % 6 == 0) {
-                encode_embedded_data();
-            } else {
-                uint8_t lcss = get_embedded_data(buf+20, buf[15] & 0x0F);
-                get_emb_data(buf+20, lcss);
-            }
-
-            if(h == 1) sendto(udp1, buf, 55, 0, (const struct sockaddr *)&host1, sizeof(host1));
-            else       sendto(udp2, buf, 55, 0, (const struct sockaddr *)&host2, sizeof(host2));
-        }
-
-        // 3. Enviar TERMINATOR (opcional, muchos servidores lo infieren)
-        memcpy(buf, "DMRD", 4);
-        buf[4] = (total_frames + 1) % 256;
-        buf[5] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 16 & 0xff;
-        buf[6] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 8 & 0xff;
-        buf[7] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 0 & 0xff;
-        if(h == 1){
-            buf[8] = (host1_tg >> 16) & 0xff;
-            buf[9] = (host1_tg >> 8) & 0xff;
-            buf[10] = (host1_tg >> 0) & 0xff;
-        } else {
-            buf[8] = (host2_tg >> 16) & 0xff;
-            buf[9] = (host2_tg >> 8) & 0xff;
-            buf[10] = (host2_tg >> 0) & 0xff;
-        }
-        buf[11] = (get_dmrid(h) >> 24) & 0xff;
-        buf[12] = (get_dmrid(h) >> 16) & 0xff;
-        buf[13] = (get_dmrid(h) >> 8) & 0xff;
-        buf[14] = (get_dmrid(h) >> 0) & 0xff;
-        buf[15] = 0x80 | (2 << 4) | 2; // DATASYNC + TERMINATOR
-        *(uint32_t *)(&buf[16]) = stream_id;
-        generate_header();
-        if(h == 1) sendto(udp1, buf, 55, 0, (const struct sockaddr *)&host1, sizeof(host1));
-        else       sendto(udp2, buf, 55, 0, (const struct sockaddr *)&host2, sizeof(host2));
-
-        fprintf(stderr, "Connected to DMR%d (PTT %d sec)\n", h, PTT_TIME);
-        return connect_status;
+        break;
+        
+    case CONNECTED:
+        // Ya conectado, no hacer nada
+        break;
     }
 
-    // Enviar paquetes de auth o conf
-    if(h == 1){
-        sendto(udp1, out, len, 0, (const struct sockaddr *)&host1, sizeof(host1));
-    } else {
-        sendto(udp2, out, len, 0, (const struct sockaddr *)&host2, sizeof(host2));
-    }
     return connect_status;
 }
 
-// --- main() original, sin cambios ---
+// --- FUNCIÓN PARA ENVIAR CONFIGURACIÓN (separada) ---
+void send_configuration(int h)
+{
+    char out[400];
+    char latitude[20U], longitude[20U];
+    memset(out, 0, 400);
+    
+    memcpy(out, "RPTC", 4);
+    out[4] = (get_dmrid(h) >> 24) & 0xff;
+    out[5] = (get_dmrid(h) >> 16) & 0xff;
+    out[6] = (get_dmrid(h) >> 8) & 0xff;
+    out[7] = (get_dmrid(h) >> 0) & 0xff;
+    sprintf(latitude, "%08f", 50.0f);
+    sprintf(longitude, "%09f", 3.0f);
+    sprintf(&out[8], "%-8.8s%09u%09u%02u%02u%8.8s%9.9s%03d%-20.20s%-19.19s%c%-124.124s%-40.40s%-40.40s", callsign,
+            438800000, 438800000, 1, 1, latitude, longitude, 0, "DMR2DMR","DMR2DMR", '4', "www.qrz.com", "20190131", "MMDVM");
+    int len = 302;
+    
+    if(h == 1){
+        sendto(udp1, out, len, 0, (const struct sockaddr *)&host1, sizeof(host1));
+#ifdef DEBUG
+        fprintf(stderr, "SEND DMR1 RPTC: ");
+        for(int i = 0; i < 50; ++i) fprintf(stderr, "%02x ", (uint8_t)out[i]); // Solo primeros 50 bytes
+        fprintf(stderr, "\n");
+#endif
+    } else {
+        sendto(udp2, out, len, 0, (const struct sockaddr *)&host2, sizeof(host2));
+#ifdef DEBUG
+        fprintf(stderr, "SEND DMR2 RPTC: ");
+        for(int i = 0; i < 50; ++i) fprintf(stderr, "%02x ", (uint8_t)out[i]); // Solo primeros 50 bytes
+        fprintf(stderr, "\n");
+#endif
+    }
+}
+
+// --- FUNCIÓN PARA ENVIAR PTT INICIAL ---
+void send_initial_ptt(int h)
+{
+    uint32_t stream_id = (rand() % 0xFFFFFFFF) + 1;
+    int total_frames = PTT_TIME * 6;
+
+    // HEADER
+    memcpy(buf, "DMRD", 4);
+    buf[4] = 0x00;
+    buf[5] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 16 & 0xff;
+    buf[6] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 8 & 0xff;
+    buf[7] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 0 & 0xff;
+    if(h == 1){
+        buf[8] = (host1_tg >> 16) & 0xff;
+        buf[9] = (host1_tg >> 8) & 0xff;
+        buf[10] = (host1_tg >> 0) & 0xff;
+    } else {
+        buf[8] = (host2_tg >> 16) & 0xff;
+        buf[9] = (host2_tg >> 8) & 0xff;
+        buf[10] = (host2_tg >> 0) & 0xff;
+    }
+    buf[11] = (get_dmrid(h) >> 24) & 0xff;
+    buf[12] = (get_dmrid(h) >> 16) & 0xff;
+    buf[13] = (get_dmrid(h) >> 8) & 0xff;
+    buf[14] = (get_dmrid(h) >> 0) & 0xff;
+    buf[15] = 0x80 | (2 << 4) | 1;
+    *(uint32_t *)(&buf[16]) = stream_id;
+    generate_header();
+    
+    if(h == 1) sendto(udp1, buf, 55, 0, (const struct sockaddr *)&host1, sizeof(host1));
+    else sendto(udp2, buf, 55, 0, (const struct sockaddr *)&host2, sizeof(host2));
+
+    // VOICE FRAMES
+    for (int i = 0; i < total_frames; i++) {
+        memcpy(buf, "DMRD", 4);
+        buf[4] = (i + 1) % 256;
+        buf[5] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 16 & 0xff;
+        buf[6] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 8 & 0xff;
+        buf[7] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 0 & 0xff;
+        if(h == 1){
+            buf[8] = (host1_tg >> 16) & 0xff;
+            buf[9] = (host1_tg >> 8) & 0xff;
+            buf[10] = (host1_tg >> 0) & 0xff;
+        } else {
+            buf[8] = (host2_tg >> 16) & 0xff;
+            buf[9] = (host2_tg >> 8) & 0xff;
+            buf[10] = (host2_tg >> 0) & 0xff;
+        }
+        buf[11] = (get_dmrid(h) >> 24) & 0xff;
+        buf[12] = (get_dmrid(h) >> 16) & 0xff;
+        buf[13] = (get_dmrid(h) >> 8) & 0xff;
+        buf[14] = (get_dmrid(h) >> 0) & 0xff;
+        if (i % 6 == 0) {
+            buf[15] = 0x80 | (1 << 4) | ((i / 6) % 6);
+        } else {
+            buf[15] = 0x80 | (0 << 4) | ((i / 6) % 6);
+        }
+        *(uint32_t *)(&buf[16]) = stream_id;
+
+        static const uint8_t silent_voice[27] = {
+            0x08,0x1C,0x0C,0x0E,0x0C,0x0C,0x08,0x0C,0x08,
+            0x08,0x0C,0x0C,0x0C,0x0C,0x08,0x0C,0x08,0x08,
+            0x0C,0x0C,0x0C,0x0C,0x08,0x0C,0x08,0x08,0x0C
+        };
+        memcpy(buf + 20, silent_voice, 27);
+
+        if (i % 6 == 0) {
+            encode_embedded_data();
+        } else {
+            uint8_t lcss = get_embedded_data(buf+20, buf[15] & 0x0F);
+            get_emb_data(buf+20, lcss);
+        }
+
+        if(h == 1) sendto(udp1, buf, 55, 0, (const struct sockaddr *)&host1, sizeof(host1));
+        else sendto(udp2, buf, 55, 0, (const struct sockaddr *)&host2, sizeof(host2));
+    }
+
+    // TERMINATOR
+    memcpy(buf, "DMRD", 4);
+    buf[4] = (total_frames + 1) % 256;
+    buf[5] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 16 & 0xff;
+    buf[6] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 8 & 0xff;
+    buf[7] = ((get_dmrid(h) > 99999999) ? get_dmrid(h)/100 : get_dmrid(h)) >> 0 & 0xff;
+    if(h == 1){
+        buf[8] = (host1_tg >> 16) & 0xff;
+        buf[9] = (host1_tg >> 8) & 0xff;
+        buf[10] = (host1_tg >> 0) & 0xff;
+    } else {
+        buf[8] = (host2_tg >> 16) & 0xff;
+        buf[9] = (host2_tg >> 8) & 0xff;
+        buf[10] = (host2_tg >> 0) & 0xff;
+    }
+    buf[11] = (get_dmrid(h) >> 24) & 0xff;
+    buf[12] = (get_dmrid(h) >> 16) & 0xff;
+    buf[13] = (get_dmrid(h) >> 8) & 0xff;
+    buf[14] = (get_dmrid(h) >> 0) & 0xff;
+    buf[15] = 0x80 | (2 << 4) | 2;
+    *(uint32_t *)(&buf[16]) = stream_id;
+    generate_header();
+    if(h == 1) sendto(udp1, buf, 55, 0, (const struct sockaddr *)&host1, sizeof(host1));
+    else sendto(udp2, buf, 55, 0, (const struct sockaddr *)&host2, sizeof(host2));
+
+    fprintf(stderr, "Initial PTT sent to DMR%d (%d seconds)\n", h, PTT_TIME);
+}
+
+// --- MAIN CORREGIDO ---
 int main(int argc, char **argv)
 {
-    struct 	sockaddr_in rx;
-    struct 	hostent *hp;
-    char *	host1_url;
-    char *	host2_url;
-    int 	host1_port;
-    int 	host2_port;
-    int 	rxlen;
-    int 	r;
-    int 	udprx, maxudp;
+    struct  sockaddr_in rx;
+    struct  hostent *hp;
+    char *  host1_url;
+    char *  host2_url;
+    int     host1_port;
+    int     host2_port;
+    int     rxlen;
+    int     r;
+    int     udprx, maxudp;
     socklen_t l = sizeof(host1);
-    static uint64_t ping_cnt1 = 0;
-    static uint64_t ping_cnt2 = 0;
-    time_t pong_time1;
-    time_t pong_time2;
+
+    // Variables para controlar el estado de autenticación
+    int host1_auth_sent = 0;
+    int host2_auth_sent = 0;
 
     if(argc != 5){
         fprintf(stderr, "Usage: dmrcon [CALLSIGN] [DMRID] [DMRHost1IP:PORT:TG:PW] [DMRHost2IP:PORT:TG:PW]\n");
@@ -1008,19 +1018,19 @@ int main(int argc, char **argv)
         host2_port = atoi(strtok(NULL, ":"));
         host2_tg = atoi(strtok(NULL, ":"));
         host2_pw = strtok(NULL, ":");
-        printf("DMR1: %s:%d\n", host1_url, host1_port);
-        printf("DMR2: %s:%d\n", host2_url, host2_port);
+        printf("DMR1: %s:%d TG:%d\n", host1_url, host1_port, host1_tg);
+        printf("DMR2: %s:%d TG:%d\n", host2_url, host2_port, host2_tg);
     }
 
     signal(SIGINT, process_signal);
     signal(SIGALRM, process_signal);
 
     if ((udp1 = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-        perror("cannot create socket");
+        perror("cannot create socket for DMR1");
         return 0;
     }
     if ((udp2 = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-        perror("cannot create socket");
+        perror("cannot create socket for DMR2");
         return 0;
     }
     maxudp = max(udp1, udp2) + 1;
@@ -1047,14 +1057,17 @@ int main(int argc, char **argv)
 
     host1_cnt = 0;
     host2_cnt = 0;
-    int host1_connect_status = DISCONNECTED;
-    int host2_connect_status = DISCONNECTED;
+    last_activity1 = time(NULL);
+    last_activity2 = time(NULL);
+    
     alarm(5);
 
     while (1) {
+        // RECONEXIÓN SILENCIOSA
         if(host1_connect_status == DISCONNECTED){
             host1_connect_status = CONNECTING;
-            pong_time1 = time(NULL);
+            host1_auth_sent = 0; // Reset auth flag
+            last_activity1 = time(NULL);
             buf[0] = 'R';
             buf[1] = 'P';
             buf[2] = 'T';
@@ -1064,16 +1077,18 @@ int main(int argc, char **argv)
             buf[6] = (get_dmrid(1) >> 8) & 0xff;
             buf[7] = (get_dmrid(1) >> 0) & 0xff;
             sendto(udp1, buf, 8, 0, (const struct sockaddr *)&host1, sizeof(host1));
-            fprintf(stderr, "Connecting to %s...\n", host1_url);
 #ifdef DEBUG
-            fprintf(stderr, "SEND DMR1: ");
+            fprintf(stderr, "SEND DMR1 RPTL: ");
             for(int i = 0; i < 8; ++i) fprintf(stderr, "%02x ", buf[i]);
             fprintf(stderr, "\n");
-#endif			
+#endif
+            fprintf(stderr, "Connecting to DMR1...\n");
         }
+        
         if(host2_connect_status == DISCONNECTED){
             host2_connect_status = CONNECTING;
-            pong_time2 = time(NULL);
+            host2_auth_sent = 0; // Reset auth flag
+            last_activity2 = time(NULL);
             buf[0] = 'R';
             buf[1] = 'P';
             buf[2] = 'T';
@@ -1083,19 +1098,25 @@ int main(int argc, char **argv)
             buf[6] = (get_dmrid(2) >> 8) & 0xff;
             buf[7] = (get_dmrid(2) >> 0) & 0xff;
             sendto(udp2, buf, 8, 0, (const struct sockaddr *)&host2, sizeof(host2));
-            fprintf(stderr, "Connecting to %s...\n", host2_url);
 #ifdef DEBUG
-            fprintf(stderr, "SEND DMR2: ");
+            fprintf(stderr, "SEND DMR2 RPTL: ");
             for(int i = 0; i < 8; ++i) fprintf(stderr, "%02x ", buf[i]);
             fprintf(stderr, "\n");
 #endif
+            fprintf(stderr, "Connecting to DMR2...\n");
         }
 
         FD_ZERO(&udpset);
         FD_SET(udp1, &udpset);
         FD_SET(udp2, &udpset);
-        r = select(maxudp, &udpset, NULL, NULL, NULL);
+        
+        struct timeval tv;
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+        
+        r = select(maxudp, &udpset, NULL, NULL, &tv);
         rxlen = 0;
+        
         if(r > 0){
             if(FD_ISSET(udp1, &udpset)) {
                 rxlen = recvfrom(udp1, buf, BUFSIZE, 0, (struct sockaddr *)&rx, &l);
@@ -1108,26 +1129,53 @@ int main(int argc, char **argv)
         }
 
 #ifdef DEBUG
-        if(rxlen >= 11){
-            if(rx.sin_addr.s_addr == host1.sin_addr.s_addr){
+        if(rxlen > 0){
+            if(udprx == udp1 && rx.sin_addr.s_addr == host1.sin_addr.s_addr){
                 fprintf(stderr, "RECV DMR1: ");
             }
-            else if(rx.sin_addr.s_addr == host2.sin_addr.s_addr){
+            else if(udprx == udp2 && rx.sin_addr.s_addr == host2.sin_addr.s_addr){
                 fprintf(stderr, "RECV DMR2: ");
             }
-            for(int i = 0; i < rxlen; ++i) fprintf(stderr, "%02x ", buf[i]);
+            for(int i = 0; i < (rxlen < 20 ? rxlen : 20); ++i) fprintf(stderr, "%02x ", buf[i]);
+            if(rxlen > 20) fprintf(stderr, "...");
             fprintf(stderr, "\n");
         }
 #endif
 
+        // PROCESAMIENTO DE DATOS RECIBIDOS - DMR1
         if( rxlen && (udprx == udp1) && (rx.sin_addr.s_addr == host1.sin_addr.s_addr) ){
-            if((host1_connect_status != CONNECTED_RW) && (memcmp(buf, "RPTACK", 6U) == 0)){
-                host1_connect_status = process_connect(host1_connect_status, buf, 1);
+            last_activity1 = time(NULL);
+            ping_missed1 = 0;
+            
+            if(host1_connect_status == CONNECTING){
+                if(memcmp(buf, "RPTACK", 6U) == 0){
+                    if(!host1_auth_sent) {
+                        // Primer RPTACK - enviar autenticación
+                        host1_connect_status = process_connect(host1_connect_status, buf, 1);
+                        host1_auth_sent = 1;
+                        fprintf(stderr, "Sending authentication to DMR1...\n");
+                    } else {
+                        // Segundo RPTACK - autenticación exitosa, enviar configuración
+                        send_configuration(1);
+                        host1_connect_status = CONNECTED;
+                        fprintf(stderr, "Authentication successful for DMR1, sending configuration...\n");
+                    }
+                }
+                else if(memcmp(buf, "MSTNAK", 6U) == 0){
+                    fprintf(stderr, "DMR1 authentication failed\n");
+                    host1_connect_status = DISCONNECTED;
+                }
             }
-            else if( (host1_connect_status == CONNECTED_RW) && (memcmp(buf, "MSTPONG", 7U) == 0) ){
-                pong_time1 = time(NULL);
+            else if(host1_connect_status == CONNECTED && memcmp(buf, "RPTACK", 6U) == 0){
+                // Configuración aceptada, enviar PTT inicial
+                if (PTT_DELAY > 0) {
+                    sleep(PTT_DELAY);
+                }
+                send_initial_ptt(1);
             }
-            else if( (host1_connect_status == CONNECTED_RW) && (rxlen == 55) ){
+            
+            // Reenviar tráfico DMR
+            if( (host1_connect_status == CONNECTED) && (rxlen == 55) && (memcmp(buf, "DMRD", 4) == 0) ){
                 rx_srcid = ((buf[5] << 16) & 0xff0000) | ((buf[6] << 8) & 0xff00) | (buf[7] & 0xff);
                 if(rx_srcid == 0){
                     rx_srcid = ((get_dmrid(1) > 99999999) ? get_dmrid(1)/100 : get_dmrid(1));
@@ -1158,21 +1206,47 @@ int main(int argc, char **argv)
                 if(rx_srcid > 0){
                     sendto(udp2, buf, rxlen, 0, (const struct sockaddr *)&host2, sizeof(host2));
 #ifdef DEBUG
-                    fprintf(stderr, "SEND DMR2: ");
-                    for(int i = 0; i < rxlen; ++i) fprintf(stderr, "%02x ", buf[i]);
-                    fprintf(stderr, "\n");
+                    fprintf(stderr, "SEND DMR2 DMRD: ");
+                    for(int i = 0; i < 20; ++i) fprintf(stderr, "%02x ", buf[i]);
+                    fprintf(stderr, "...\n");
 #endif
                 }
             }
         }
+        // PROCESAMIENTO DE DATOS RECIBIDOS - DMR2
         else if( rxlen && (udprx == udp2) && (rx.sin_addr.s_addr == host2.sin_addr.s_addr) ){
-            if((host2_connect_status != CONNECTED_RW) && (memcmp(buf, "RPTACK", 6U) == 0)){
-                host2_connect_status = process_connect(host2_connect_status, buf, 2);
+            last_activity2 = time(NULL);
+            ping_missed2 = 0;
+            
+            if(host2_connect_status == CONNECTING){
+                if(memcmp(buf, "RPTACK", 6U) == 0){
+                    if(!host2_auth_sent) {
+                        // Primer RPTACK - enviar autenticación
+                        host2_connect_status = process_connect(host2_connect_status, buf, 2);
+                        host2_auth_sent = 1;
+                        fprintf(stderr, "Sending authentication to DMR2...\n");
+                    } else {
+                        // Segundo RPTACK - autenticación exitosa, enviar configuración
+                        send_configuration(2);
+                        host2_connect_status = CONNECTED;
+                        fprintf(stderr, "Authentication successful for DMR2, sending configuration...\n");
+                    }
+                }
+                else if(memcmp(buf, "MSTNAK", 6U) == 0){
+                    fprintf(stderr, "DMR2 authentication failed\n");
+                    host2_connect_status = DISCONNECTED;
+                }
             }
-            else if( (host2_connect_status == CONNECTED_RW) && (memcmp(buf, "MSTPONG", 7U) == 0) ){
-                pong_time2 = time(NULL);
+            else if(host2_connect_status == CONNECTED && memcmp(buf, "RPTACK", 6U) == 0){
+                // Configuración aceptada, enviar PTT inicial
+                if (PTT_DELAY > 0) {
+                    sleep(PTT_DELAY);
+                }
+                send_initial_ptt(2);
             }
-            else if( (host2_connect_status == CONNECTED_RW) && (rxlen == 55) ){
+            
+            // Reenviar tráfico DMR
+            if( (host2_connect_status == CONNECTED) && (rxlen == 55) && (memcmp(buf, "DMRD", 4) == 0) ){
                 rx_srcid = ((buf[5] << 16) & 0xff0000) | ((buf[6] << 8) & 0xff00) | (buf[7] & 0xff);
                 if(rx_srcid == 0){
                     rx_srcid = ((get_dmrid(2) > 99999999) ? get_dmrid(2)/100 : get_dmrid(2));
@@ -1203,21 +1277,31 @@ int main(int argc, char **argv)
                 if(rx_srcid > 0){
                     sendto(udp1, buf, rxlen, 0, (const struct sockaddr *)&host1, sizeof(host1));
 #ifdef DEBUG
-                    fprintf(stderr, "SEND DMR1: ");
-                    for(int i = 0; i < rxlen; ++i) fprintf(stderr, "%02x ", buf[i]);
-                    fprintf(stderr, "\n");
+                    fprintf(stderr, "SEND DMR1 DMRD: ");
+                    for(int i = 0; i < 20; ++i) fprintf(stderr, "%02x ", buf[i]);
+                    fprintf(stderr, "...\n");
 #endif
                 }
             }
         }
 
-        if (time(NULL)-pong_time1 > TIMEOUT) {
-            host1_connect_status = DISCONNECTED;
-            fprintf(stderr, "DMR1 connection timed out, retrying connection...\n");
+        // DETECCIÓN DE DESCONEXIÓN
+        time_t now = time(NULL);
+        
+        if (host1_connect_status == CONNECTED) {
+            if ((now - last_activity1 > TIMEOUT) || (ping_missed1 >= 12)) {
+                host1_connect_status = DISCONNECTED;
+                fprintf(stderr, "DMR1 connection lost, reconnecting...\n");
+            }
         }
-        if (time(NULL)-pong_time2 > TIMEOUT) {
-            host2_connect_status = DISCONNECTED;
-            fprintf(stderr, "DMR2 connection timed out, retrying connection...\n");
+        
+        if (host2_connect_status == CONNECTED) {
+            if ((now - last_activity2 > TIMEOUT) || (ping_missed2 >= 12)) {
+                host2_connect_status = DISCONNECTED;
+                fprintf(stderr, "DMR2 connection lost, reconnecting...\n");
+            }
         }
     }
+    
+    return 0;
 }
