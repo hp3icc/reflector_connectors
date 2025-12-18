@@ -279,6 +279,15 @@ void process_signal(int sig)
             b[7] = (get_dmrid(1, 0) >> 8) & 0xff;
             b[8] = (get_dmrid(1, 0) >> 0) & 0xff;
             sendto(udp1, b, 9, 0, (const struct sockaddr *)&host1, sizeof(host1));
+            
+#ifdef DEBUG
+            fprintf(stderr, "SEND DMR1 RPTCL: ");
+            for(int i = 0; i < 9; ++i){
+                fprintf(stderr, "%02x ", b[i]);
+            }
+            fprintf(stderr, "\n");
+            fflush(stderr);
+#endif
         }
         
         if (host2_connect_status == CONNECTED) {
@@ -289,16 +298,22 @@ void process_signal(int sig)
             b[7] = (get_dmrid(2, 0) >> 8) & 0xff;
             b[8] = (get_dmrid(2, 0) >> 0) & 0xff;
             sendto(udp2, b, 9, 0, (const struct sockaddr *)&host2, sizeof(host2));
+            
+#ifdef DEBUG
+            fprintf(stderr, "SEND DMR2 RPTCL: ");
+            for(int i = 0; i < 9; ++i){
+                fprintf(stderr, "%02x ", b[i]);
+            }
+            fprintf(stderr, "\n");
+            fflush(stderr);
+#endif
         }
         
 #ifdef DEBUG
-        fprintf(stderr, "SEND BOTH: ");
-        for(int i = 0; i < 9; ++i){
-            fprintf(stderr, "%02x ", b[i]);
-        }
-        fprintf(stderr, "\n");
+        fprintf(stderr, "SEND BOTH completed\n");
         fflush(stderr);
 #endif
+        
         close(udp1);
         close(udp2);
         exit(EXIT_SUCCESS);
@@ -316,6 +331,15 @@ void process_signal(int sig)
             b[10] = (get_dmrid(1, 0) >> 0) & 0xff;
             sendto(udp1, b, 11, 0, (const struct sockaddr *)&host1, sizeof(host1));
             ping_missed1++;
+            
+#ifdef DEBUG
+            fprintf(stderr, "SEND DMR1 PING: ");
+            for(int i = 0; i < 11; ++i){
+                fprintf(stderr, "%02x ", b[i]);
+            }
+            fprintf(stderr, "\n");
+            fflush(stderr);
+#endif
         }
         
         if (host2_connect_status == CONNECTED) {
@@ -328,6 +352,15 @@ void process_signal(int sig)
             b[10] = (get_dmrid(2, 0) >> 0) & 0xff;
             sendto(udp2, b, 11, 0, (const struct sockaddr *)&host2, sizeof(host2));
             ping_missed2++;
+            
+#ifdef DEBUG
+            fprintf(stderr, "SEND DMR2 PING: ");
+            for(int i = 0; i < 11; ++i){
+                fprintf(stderr, "%02x ", b[i]);
+            }
+            fprintf(stderr, "\n");
+            fflush(stderr);
+#endif
         }
         
         alarm(5);
