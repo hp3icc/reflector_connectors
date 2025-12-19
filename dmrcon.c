@@ -21,7 +21,7 @@
 //#define USE_7DIGIT_ID_PEER1
 //#define USE_7DIGIT_ID_PEER2
 // === CONFIGURE FIRST PTT POST FULL CONNECTION (modify before compiling) ===
-#define PTT_DELAY 3  // seconds to wait before PTT (0 = immediate)
+#define PTT_DELAY 4  // seconds to wait before PTT (0 = immediate)
 #define PTT_TIME  2   // PTT duration in seconds (minimum 1)
 
 #include <stdio.h>
