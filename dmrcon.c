@@ -1214,7 +1214,29 @@ int main(int argc, char **argv)
                         fprintf(stderr, "Sending authentication to DMR1...\n");
                     } else {
                         // Segundo RPTACK - autenticación exitosa, enviar configuración
+                        /* --- Reemplazo para compatibilidad FREEDMR_COMPAT1 --- */
                         send_configuration(1);
+                        #ifdef FREEDMR_COMPAT1
+                        {
+                            char out_opts[200];
+                            int len_opts;
+                            memset(out_opts, 0, sizeof(out_opts));
+                            memcpy(out_opts, "RPTO", 4);
+                            out_opts[4] = (get_dmrid(1, 0) >> 24) & 0xff;
+                            out_opts[5] = (get_dmrid(1, 0) >> 16) & 0xff;
+                            out_opts[6] = (get_dmrid(1, 0) >> 8) & 0xff;
+                            out_opts[7] = (get_dmrid(1, 0) >> 0) & 0xff;
+                            sprintf(&out_opts[8], "TS2=%u;DIAL=0;VOICE=0;LANG=en_GB;SINGLE=0;TIMER=10;", host1_tg);
+                            len_opts = 8 + strlen(&out_opts[8]);
+                            fprintf(stderr, "Sending opts to DMR1...\n");
+                            sendto(udp1, out_opts, len_opts, 0, (const struct sockaddr *)&host1, sizeof(host1));
+                        #ifdef DEBUG
+                            fprintf(stderr, "SEND DMR1 RPTO: ");
+                            for(int i = 0; i < len_opts; ++i) fprintf(stderr, "%02x ", (uint8_t)out_opts[i]);
+                            fprintf(stderr, "\n");
+                        #endif
+                        }
+                        #endif
                         host1_connect_status = CONNECTED;
                         pong_time1 = time(NULL); // reset pong time on successful connect
                         fprintf(stderr, "Authentication successful for DMR1, sending configuration...\n");
@@ -1294,7 +1316,29 @@ int main(int argc, char **argv)
                         fprintf(stderr, "Sending authentication to DMR2...\n");
                     } else {
                         // Segundo RPTACK - autenticación exitosa, enviar configuración
+                        /* --- Reemplazo para compatibilidad FREEDMR_COMPAT2 --- */
                         send_configuration(2);
+                        #ifdef FREEDMR_COMPAT2
+                        {
+                            char out_opts[200];
+                            int len_opts;
+                            memset(out_opts, 0, sizeof(out_opts));
+                            memcpy(out_opts, "RPTO", 4);
+                            out_opts[4] = (get_dmrid(2, 0) >> 24) & 0xff;
+                            out_opts[5] = (get_dmrid(2, 0) >> 16) & 0xff;
+                            out_opts[6] = (get_dmrid(2, 0) >> 8) & 0xff;
+                            out_opts[7] = (get_dmrid(2, 0) >> 0) & 0xff;
+                            sprintf(&out_opts[8], "TS2=%u;DIAL=0;VOICE=0;LANG=en_GB;SINGLE=0;TIMER=10;", host2_tg);
+                            len_opts = 8 + strlen(&out_opts[8]);
+                            fprintf(stderr, "Sending opts to DMR2...\n");
+                            sendto(udp2, out_opts, len_opts, 0, (const struct sockaddr *)&host2, sizeof(host2));
+                        #ifdef DEBUG
+                            fprintf(stderr, "SEND DMR2 RPTO: ");
+                            for(int i = 0; i < len_opts; ++i) fprintf(stderr, "%02x ", (uint8_t)out_opts[i]);
+                            fprintf(stderr, "\n");
+                        #endif
+                        }
+                        #endif
                         host2_connect_status = CONNECTED;
                         pong_time2 = time(NULL); // reset pong time on successful connect
                         fprintf(stderr, "Authentication successful for DMR2, sending configuration...\n");
