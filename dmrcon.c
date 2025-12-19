@@ -22,22 +22,24 @@
 //#define USE_7DIGIT_ID_PEER2
 // === CONFIGURE FIRST PTT POST FULL CONNECTION (modify before compiling) ===
 #define PTT_DELAY 3  // seconds to wait before PTT (0 = immediate)
-#define PTT_TIME  1   // PTT duration in seconds (minimum 1)
+#define PTT_TIME  2   // PTT duration in seconds (minimum 1)
 
-#include <stdio.h> 
+#include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <signal.h>
-#include <unistd.h> 
-#include <string.h> 
+#include <unistd.h>
+#include <string.h>
 #include <netdb.h>
 #include <ctype.h>
 #include <time.h>
-#include <sys/types.h> 
-#include <sys/socket.h> 
-#include <arpa/inet.h> 
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/ioctl.h>
+#include <sys/select.h>
+#include <sys/time.h>
 
 #define BUFSIZE 2048
 #define TIMEOUT 30
@@ -98,10 +100,7 @@ const unsigned char EXP_TABLE[] = {
     0x4DU, 0x9AU, 0x29U, 0x52U, 0xA4U, 0x55U, 0xAAU, 0x49U, 0x92U, 0x39U, 0x72U, 0xE4U, 0xD5U, 0xB7U, 0x73U, 0xE6U,
     0xD1U, 0xBFU, 0x63U, 0xC6U, 0x91U, 0x3FU, 0x7EU, 0xFCU, 0xE5U, 0xD7U, 0xB3U, 0x7BU, 0xF6U, 0xF1U, 0xFFU, 0xE3U,
     0xDBU, 0xABU, 0x4BU, 0x96U, 0x31U, 0x62U, 0xC4U, 0x95U, 0x37U, 0x6EU, 0xDCU, 0xA5U, 0x57U, 0xAEU, 0x41U, 0x82U,
-    0x19U, 0x32U, 0x64U, 0xC8U, 0x8DU, 0x07U, 0x0EU, 0x1CU, 0x38U, 0x70U, 0xE0U, 0xDDU, 0xA7U, 0x53U, 0xA6U, 0x51U,
-    0xA2U, 0x59U, 0xB2U, 0x79U, 0xF2U, 0xF9U, 0xEFU, 0xC3U, 0x9BU, 0x2BU, 0x56U, 0xACU, 0x45U, 0x8AU, 0x09U, 0x12U,
-    0x24U, 0x48U, 0x90U, 0x3DU, 0x7AU, 0xF4U, 0xF5U, 0xF7U, 0xF3U, 0xFBU, 0xEBU, 0xCBU, 0x8BU, 0x0BU, 0x16U, 0x2CU,
-    0x58U, 0xB0U, 0x7DU, 0xFAU, 0xE9U, 0xCFU, 0x83U, 0x1BU, 0x36U, 0x6CU, 0xD8U, 0xADU, 0x47U, 0x8EU, 0x01U, 0x00U
+    0x19U, 0x32U, 0x64U, 0xC8U, 0x8DU, 0x07U, 0x0EU, 0x1CU, 0x38U, 0x70U, 0xE0U, 0xDDU, 0xA7U, 0x53U, 0xA6U, 0x51U
 };
 const unsigned char LOG_TABLE[] = {
     0x00U, 0x00U, 0x01U, 0x19U, 0x02U, 0x32U, 0x1AU, 0xC6U, 0x03U, 0xDFU, 0x33U, 0xEEU, 0x1BU, 0x68U, 0xC7U, 0x4BU,
@@ -166,7 +165,7 @@ struct sockaddr_in   host1;
 struct sockaddr_in   host2;
 int                 udp1;
 int                 udp2;
-fd_set              udpset; 
+fd_set              udpset;
 uint8_t             buf[BUFSIZE];
 uint32_t            host1_cnt;
 uint32_t            host2_cnt;
@@ -195,6 +194,10 @@ uint32_t ping_missed2 = 0;
 time_t last_activity1 = 0;
 time_t last_activity2 = 0;
 
+/* narspt-style pong times: update when MSTPONG received, use to time out */
+time_t pong_time1 = 0;
+time_t pong_time2 = 0;
+
 static const unsigned char fillbuf[64] = { 0x80, 0 };
 
 // --- Función para obtener el ID de DMR CORREGIDA ---
@@ -202,7 +205,6 @@ int get_dmrid(int host_num, int for_traffic) {
     int id_to_use = dmrid;
 
     if (for_traffic) {
-        // PARA TRÁFICO (PTT inicial, DMRD): usar conversión según configuración
 #if defined(USE_7DIGIT_ID_PEER1)
         if (host_num == 1 && dmrid > 9999999) {
             id_to_use = dmrid / 100;  // Convertir 9->7 dígitos para tráfico
@@ -214,7 +216,6 @@ int get_dmrid(int host_num, int for_traffic) {
         }
 #endif
     } else {
-        // PARA LOGIN/AUTENTICACIÓN: usar conversión según configuración
 #if defined(USE_7DIGIT_ID_PEER1)
         if (host_num == 1 && dmrid > 9999999) {
             id_to_use = dmrid / 100;  // Convertir 9->7 dígitos para login
@@ -253,12 +254,12 @@ void bitsToByteBE(bool* bits, unsigned char* byte)
     *byte |= bits[6U] ? 0x02U : 0x00U;
     *byte |= bits[7U] ? 0x01U : 0x00U;
 }
-int max(int x, int y) 
-{ 
-    if (x > y) 
-        return x; 
+int max(int x, int y)
+{
+    if (x > y)
+        return x;
     else
-        return y; 
+        return y;
 }
 static inline void set_uint32(unsigned char* cp, uint32_t v)
 {
@@ -270,7 +271,7 @@ void process_signal(int sig)
 {
     if(sig == SIGINT){
         fprintf(stderr, "\nShutting down link\n");
-        
+
         if (host1_connect_status == CONNECTED) {
             uint8_t b[20];
             b[0] = 'R'; b[1] = 'P'; b[2] = 'T'; b[3] = 'C'; b[4] = 'L';
@@ -279,7 +280,7 @@ void process_signal(int sig)
             b[7] = (get_dmrid(1, 0) >> 8) & 0xff;
             b[8] = (get_dmrid(1, 0) >> 0) & 0xff;
             sendto(udp1, b, 9, 0, (const struct sockaddr *)&host1, sizeof(host1));
-            
+
 #ifdef DEBUG
             fprintf(stderr, "SEND DMR1 RPTCL: ");
             for(int i = 0; i < 9; ++i){
@@ -289,7 +290,7 @@ void process_signal(int sig)
             fflush(stderr);
 #endif
         }
-        
+
         if (host2_connect_status == CONNECTED) {
             uint8_t b[20];
             b[0] = 'R'; b[1] = 'P'; b[2] = 'T'; b[3] = 'C'; b[4] = 'L';
@@ -298,7 +299,7 @@ void process_signal(int sig)
             b[7] = (get_dmrid(2, 0) >> 8) & 0xff;
             b[8] = (get_dmrid(2, 0) >> 0) & 0xff;
             sendto(udp2, b, 9, 0, (const struct sockaddr *)&host2, sizeof(host2));
-            
+
 #ifdef DEBUG
             fprintf(stderr, "SEND DMR2 RPTCL: ");
             for(int i = 0; i < 9; ++i){
@@ -308,19 +309,19 @@ void process_signal(int sig)
             fflush(stderr);
 #endif
         }
-        
+
 #ifdef DEBUG
         fprintf(stderr, "SEND BOTH completed\n");
         fflush(stderr);
 #endif
-        
+
         close(udp1);
         close(udp2);
         exit(EXIT_SUCCESS);
     }
-    
+
     if(sig == SIGALRM){
-        // NECESITAS SEPARAR LOS PINGS TAMBIÉN
+        // send pings (narspt style)
         if (host1_connect_status == CONNECTED) {
             uint8_t b[20];
             char tag[] = { 'R','P','T','P','I','N','G' };
@@ -330,8 +331,6 @@ void process_signal(int sig)
             b[9] = (get_dmrid(1, 0) >> 8) & 0xff;
             b[10] = (get_dmrid(1, 0) >> 0) & 0xff;
             sendto(udp1, b, 11, 0, (const struct sockaddr *)&host1, sizeof(host1));
-            ping_missed1++;
-            
 #ifdef DEBUG
             fprintf(stderr, "SEND DMR1 PING: ");
             for(int i = 0; i < 11; ++i){
@@ -341,7 +340,7 @@ void process_signal(int sig)
             fflush(stderr);
 #endif
         }
-        
+
         if (host2_connect_status == CONNECTED) {
             uint8_t b[20];
             char tag[] = { 'R','P','T','P','I','N','G' };
@@ -351,8 +350,6 @@ void process_signal(int sig)
             b[9] = (get_dmrid(2, 0) >> 8) & 0xff;
             b[10] = (get_dmrid(2, 0) >> 0) & 0xff;
             sendto(udp2, b, 11, 0, (const struct sockaddr *)&host2, sizeof(host2));
-            ping_missed2++;
-            
 #ifdef DEBUG
             fprintf(stderr, "SEND DMR2 PING: ");
             for(int i = 0; i < 11; ++i){
@@ -362,7 +359,7 @@ void process_signal(int sig)
             fflush(stderr);
 #endif
         }
-        
+
         alarm(5);
     }
 }
@@ -492,7 +489,7 @@ void generate_header()
     {
         memset(lc, 0, sizeof(lc));
         //DESTID/TGID
-        lc[3] = buf[8];     
+        lc[3] = buf[8];
         lc[4] = buf[9];
         lc[5] = buf[10];
         //SRCID
@@ -850,7 +847,7 @@ int process_connect(int connect_status, char *buf, int h)
     char latitude[20U], longitude[20U];
     memset(in, 0, 100);
     memset(out, 0, 400);
-    
+
     switch(connect_status){
     case CONNECTING:
         // Enviar RPTK (autenticación)
@@ -861,7 +858,7 @@ int process_connect(int connect_status, char *buf, int h)
         out[5] = (get_dmrid(h, 0) >> 16) & 0xff;
         out[6] = (get_dmrid(h, 0) >> 8) & 0xff;
         out[7] = (get_dmrid(h, 0) >> 0) & 0xff;
-        
+
         if(h == 1){
             memcpy(&in[4], host1_pw, strlen(host1_pw));
             sha256_generate(in, strlen(host1_pw) + sizeof(uint32_t), &out[8]);
@@ -871,7 +868,7 @@ int process_connect(int connect_status, char *buf, int h)
             sha256_generate(in, strlen(host2_pw) + sizeof(uint32_t), &out[8]);
         }
         len = 40;
-        
+
         if (h == 1) {
             sendto(udp1, out, len, 0, (const struct sockaddr *)&host1, sizeof(host1));
 #ifdef DEBUG
@@ -888,7 +885,7 @@ int process_connect(int connect_status, char *buf, int h)
 #endif
         }
         break;
-        
+
     case CONNECTED:
         // Ya conectado, no hacer nada
         break;
@@ -903,7 +900,7 @@ void send_configuration(int h)
     char out[400];
     char latitude[20U], longitude[20U];
     memset(out, 0, 400);
-    
+
     memcpy(out, "RPTC", 4);
     out[4] = (get_dmrid(h, 0) >> 24) & 0xff;
     out[5] = (get_dmrid(h, 0) >> 16) & 0xff;
@@ -914,7 +911,7 @@ void send_configuration(int h)
     sprintf(&out[8], "%-8.8s%09u%09u%02u%02u%8.8s%9.9s%03d%-20.20s%-19.19s%c%-124.124s%-40.40s%-40.40s", callsign,
             438800000, 438800000, 1, 1, latitude, longitude, 0, "DMR2DMR","DMR2DMR", '4', "www.qrz.com", "20190131", "MMDVM");
     int len = 302;
-    
+
     if(h == 1){
         sendto(udp1, out, len, 0, (const struct sockaddr *)&host1, sizeof(host1));
 #ifdef DEBUG
@@ -960,7 +957,7 @@ void send_initial_ptt(int h)
     buf[15] = 0x80 | (2 << 4) | 1;
     *(uint32_t *)(&buf[16]) = stream_id;
     generate_header();
-    
+
     if(h == 1) sendto(udp1, buf, 55, 0, (const struct sockaddr *)&host1, sizeof(host1));
     else sendto(udp2, buf, 55, 0, (const struct sockaddr *)&host2, sizeof(host2));
 
@@ -1061,7 +1058,7 @@ int main(int argc, char **argv)
     }
     else{
         memset(callsign, ' ', 10);
-        memcpy(callsign, argv[1], strlen(argv[1]));
+        memcpy(callsign, argv[1], strlen(argv[1]) < 10 ? strlen(argv[1]) : 10);
         dmrid = atoi(argv[2]);
         host1_url = strtok(argv[3], ":");
         host1_port = atoi(strtok(NULL, ":"));
@@ -1110,9 +1107,9 @@ int main(int argc, char **argv)
 
     host1_cnt = 0;
     host2_cnt = 0;
-    last_activity1 = time(NULL);
-    last_activity2 = time(NULL);
-    
+    pong_time1 = time(NULL);
+    pong_time2 = time(NULL);
+
     alarm(5);
 
     while (1) {
@@ -1120,7 +1117,7 @@ int main(int argc, char **argv)
         if(host1_connect_status == DISCONNECTED){
             host1_connect_status = CONNECTING;
             host1_auth_sent = 0; // Reset auth flag
-            last_activity1 = time(NULL);
+            pong_time1 = time(NULL);
             buf[0] = 'R';
             buf[1] = 'P';
             buf[2] = 'T';
@@ -1137,11 +1134,11 @@ int main(int argc, char **argv)
 #endif
             fprintf(stderr, "Connecting to DMR1...\n");
         }
-        
+
         if(host2_connect_status == DISCONNECTED){
             host2_connect_status = CONNECTING;
             host2_auth_sent = 0; // Reset auth flag
-            last_activity2 = time(NULL);
+            pong_time2 = time(NULL);
             buf[0] = 'R';
             buf[1] = 'P';
             buf[2] = 'T';
@@ -1162,14 +1159,14 @@ int main(int argc, char **argv)
         FD_ZERO(&udpset);
         FD_SET(udp1, &udpset);
         FD_SET(udp2, &udpset);
-        
+
         struct timeval tv;
         tv.tv_sec = 1;
         tv.tv_usec = 0;
-        
+
         r = select(maxudp, &udpset, NULL, NULL, &tv);
         rxlen = 0;
-        
+
         if(r > 0){
             if(FD_ISSET(udp1, &udpset)) {
                 rxlen = recvfrom(udp1, buf, BUFSIZE, 0, (struct sockaddr *)&rx, &l);
@@ -1197,20 +1194,29 @@ int main(int argc, char **argv)
 
         // PROCESAMIENTO DE DATOS RECIBIDOS - DMR1
         if( rxlen && (udprx == udp1) && (rx.sin_addr.s_addr == host1.sin_addr.s_addr) ){
+            // Update pong_time when MSTPONG (narspt behavior)
+            if ((host1_connect_status == CONNECTED) && rxlen >= 7 && memcmp(buf, "MSTPONG", 7U) == 0) {
+                pong_time1 = time(NULL);
+#ifdef DEBUG
+                fprintf(stderr, "MSTPONG DMR1 received, pong_time1 updated\n");
+#endif
+            }
+
             last_activity1 = time(NULL);
             ping_missed1 = 0;
-            
+
             if(host1_connect_status == CONNECTING){
                 if(memcmp(buf, "RPTACK", 6U) == 0){
                     if(!host1_auth_sent) {
                         // Primer RPTACK - enviar autenticación
-                        host1_connect_status = process_connect(host1_connect_status, buf, 1);
+                        host1_connect_status = process_connect(host1_connect_status, (char*)buf, 1);
                         host1_auth_sent = 1;
                         fprintf(stderr, "Sending authentication to DMR1...\n");
                     } else {
                         // Segundo RPTACK - autenticación exitosa, enviar configuración
                         send_configuration(1);
                         host1_connect_status = CONNECTED;
+                        pong_time1 = time(NULL); // reset pong time on successful connect
                         fprintf(stderr, "Authentication successful for DMR1, sending configuration...\n");
                     }
                 }
@@ -1226,7 +1232,7 @@ int main(int argc, char **argv)
                 }
                 send_initial_ptt(1);
             }
-            
+
             // Reenviar tráfico DMR
             if( (host1_connect_status == CONNECTED) && (rxlen == 55) && (memcmp(buf, "DMRD", 4) == 0) ){
                 rx_srcid = ((buf[5] << 16) & 0xff0000) | ((buf[6] << 8) & 0xff00) | (buf[7] & 0xff);
@@ -1268,20 +1274,29 @@ int main(int argc, char **argv)
         }
         // PROCESAMIENTO DE DATOS RECIBIDOS - DMR2
         else if( rxlen && (udprx == udp2) && (rx.sin_addr.s_addr == host2.sin_addr.s_addr) ){
+            // Update pong_time when MSTPONG (narspt behavior)
+            if ((host2_connect_status == CONNECTED) && rxlen >= 7 && memcmp(buf, "MSTPONG", 7U) == 0) {
+                pong_time2 = time(NULL);
+#ifdef DEBUG
+                fprintf(stderr, "MSTPONG DMR2 received, pong_time2 updated\n");
+#endif
+            }
+
             last_activity2 = time(NULL);
             ping_missed2 = 0;
-            
+
             if(host2_connect_status == CONNECTING){
                 if(memcmp(buf, "RPTACK", 6U) == 0){
                     if(!host2_auth_sent) {
                         // Primer RPTACK - enviar autenticación
-                        host2_connect_status = process_connect(host2_connect_status, buf, 2);
+                        host2_connect_status = process_connect(host2_connect_status, (char*)buf, 2);
                         host2_auth_sent = 1;
                         fprintf(stderr, "Sending authentication to DMR2...\n");
                     } else {
                         // Segundo RPTACK - autenticación exitosa, enviar configuración
                         send_configuration(2);
                         host2_connect_status = CONNECTED;
+                        pong_time2 = time(NULL); // reset pong time on successful connect
                         fprintf(stderr, "Authentication successful for DMR2, sending configuration...\n");
                     }
                 }
@@ -1297,7 +1312,7 @@ int main(int argc, char **argv)
                 }
                 send_initial_ptt(2);
             }
-            
+
             // Reenviar tráfico DMR
             if( (host2_connect_status == CONNECTED) && (rxlen == 55) && (memcmp(buf, "DMRD", 4) == 0) ){
                 rx_srcid = ((buf[5] << 16) & 0xff0000) | ((buf[6] << 8) & 0xff00) | (buf[7] & 0xff);
@@ -1338,23 +1353,32 @@ int main(int argc, char **argv)
             }
         }
 
-        // DETECCIÓN DE DESCONEXIÓN
+        // DETECCIÓN DE DESCONEXIÓN (narspt-style: based on MSTPONG/pong_time)
         time_t now = time(NULL);
-        
+
         if (host1_connect_status == CONNECTED) {
-            if ((now - last_activity1 > TIMEOUT) || (ping_missed1 >= 12)) {
+            if ((now - pong_time1 > TIMEOUT) ) {
                 host1_connect_status = DISCONNECTED;
-                fprintf(stderr, "DMR1 connection lost, reconnecting...\n");
+                fprintf(stderr, "DMR1 connection timed out (no MSTPONG), reconnecting...\n");
+            }
+        } else {
+            // if not fully connected and too long without any response, reset to DISCONNECTED to retry
+            if ((now - pong_time1 > TIMEOUT*2) ) {
+                host1_connect_status = DISCONNECTED;
             }
         }
-        
+
         if (host2_connect_status == CONNECTED) {
-            if ((now - last_activity2 > TIMEOUT) || (ping_missed2 >= 12)) {
+            if ((now - pong_time2 > TIMEOUT) ) {
                 host2_connect_status = DISCONNECTED;
-                fprintf(stderr, "DMR2 connection lost, reconnecting...\n");
+                fprintf(stderr, "DMR2 connection timed out (no MSTPONG), reconnecting...\n");
+            }
+        } else {
+            if ((now - pong_time2 > TIMEOUT*2) ) {
+                host2_connect_status = DISCONNECTED;
             }
         }
     }
-    
+
     return 0;
 }
