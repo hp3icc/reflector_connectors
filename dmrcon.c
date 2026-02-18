@@ -906,8 +906,8 @@ void send_configuration(int h)
     out[5] = (get_dmrid(h, 0) >> 16) & 0xff;
     out[6] = (get_dmrid(h, 0) >> 8) & 0xff;
     out[7] = (get_dmrid(h, 0) >> 0) & 0xff;
-    sprintf(latitude, "%08f", 50.0f);
-    sprintf(longitude, "%09f", 3.0f);
+    sprintf(latitude, "%08f", 0.0f);
+    sprintf(longitude, "%09f", 0.0f);
     sprintf(&out[8], "%-8.8s%09u%09u%02u%02u%8.8s%9.9s%03d%-20.20s%-19.19s%c%-124.124s%-40.40s%-40.40s", callsign,
             438800000, 438800000, 1, 1, latitude, longitude, 0, "DMR2DMR","DMR2DMR", '4', "www.qrz.com", "20190131", "MMDVM");
     int len = 302;
